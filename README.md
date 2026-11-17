@@ -4,11 +4,15 @@
 
 Open ZeroDesk on the Cardputer, type the address it shows into a browser on the same network, and enter the one-time code. You get the Cardputer's live screen with a working on-screen keyboard (plus pasting, screenshots and recordings), a shell, a file browser, app installs from the store, and system stats.
 
-<p>
-  <img src="docs/screen.png" width="32%" alt="The Screen tab: the Cardputer's live screen and keyboard">&nbsp;
-  <img src="docs/overview.png" width="32%" alt="Overview: CPU, memory, storage, battery and network">&nbsp;
-  <img src="docs/apps.png" width="32%" alt="Apps: install from the CardputerZero Store or a .deb">
-</p>
+![The Screen tab: the Cardputer's live screen and keyboard](docs/screen.png)
+
+<br>
+
+![Overview: CPU, memory, storage, battery and network](docs/overview.png)
+
+<br>
+
+![Apps: install from the CardputerZero Store or a .deb](docs/apps.png)
 
 ## How it works
 
