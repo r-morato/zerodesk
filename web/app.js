@@ -494,7 +494,9 @@
       }));
       showRunning(data.running && appsCache.find(a => a.id === data.running));
     }
+    let runningApp = null;
     function showRunning(app) {
+      runningApp = app || null;
       const r = $("running");
       r.classList.toggle("hidden", !app);
       if (app) r.firstChild.textContent = "Running: " + app.name;
@@ -502,8 +504,10 @@
     }
     async function startApp(a) {
       try {
+        const before = runningApp && runningApp.id !== a.id ? runningApp.name : "";
         await api("POST", "/api/apps/" + encodeURIComponent(a.id) + "/start");
-        showRunning(a); toast(a.name + " started on the Cardputer");
+        showRunning(a);
+        toast(before ? "Closed " + before + " and started " + a.name : a.name + " is running on the Cardputer");
         canvas.focus();
       } catch (e) { toast(e.message, true); }
     }

@@ -163,16 +163,20 @@ class TestApps(unittest.TestCase):
             self.assertIsNone(icon_path(apps[1], root))                     # outside the tree
             self.assertEqual(exec_argv(apps[0]["exec"]), ["/bin/true"])
 
-    def test_runner_one_at_a_time(self):
+    def test_runner_swaps_apps(self):
         with tempfile.TemporaryDirectory() as root:
             os.makedirs(os.path.join(root, "applications"))
-            with open(os.path.join(root, "applications/s.desktop"), "w") as fh:
-                fh.write("[Desktop Entry]\nName=S\nExec=/bin/sleep 30\n")
+            for name, secs in (("s", 30), ("t", 31)):
+                with open(os.path.join(root, "applications/%s.desktop" % name), "w") as fh:
+                    fh.write("[Desktop Entry]\nName=%s\nExec=/bin/sleep %d\n" % (name.upper(), secs))
             r = Runner(root)
             r.start("s")
-            from zerodesk.apps import AppError
-            with self.assertRaises(AppError):
-                r.start("s")
+            first = r.proc
+            self.assertIs(r.start("s"), r.app)          # same app: left alone
+            self.assertIs(r.proc, first)
+            r.start("t")                                # different app: swapped
+            self.assertIsNotNone(first.poll())          # the first one was stopped
+            self.assertEqual(r.running()["id"], "t")
             r.stop()
             import time
             time.sleep(0.3)

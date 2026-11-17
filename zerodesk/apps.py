@@ -73,8 +73,9 @@ def exec_argv(exec_line):
 
 
 class Runner:
-    """Runs one launcher app as a child, so ZeroDesk (and its web server)
-    keeps running while the app owns the screen and keyboard."""
+    """Runs one launcher app at a time as a child, so ZeroDesk (and its web
+    server) keeps running while the app owns the screen and keyboard.
+    Starting another app swaps: the running one is stopped first."""
 
     def __init__(self, root=APPLAUNCH, on_change=None):
         self.root = root
@@ -91,8 +92,15 @@ class Runner:
             return self.app
 
     def start(self, app_id):
+        """Start an app. If another app is running it's closed first;
+        if this same app is already running it's left alone."""
+        current = self.running()
+        if current and current["id"] == app_id:
+            return current
+        if current:
+            self.stop()
         with self._lock:
-            if self.proc and self.proc.poll() is None:
+            if self.proc and self.proc.poll() is None:      # another start won the race
                 raise AppError("%s is already running. Stop it first." % self.app["name"])
             app = next((a for a in list_apps(self.root) if a["id"] == app_id), None)
             if not app:
