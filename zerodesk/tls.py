@@ -17,7 +17,11 @@ def ensure_cert(directory=None):
     d = os.path.join(directory or config_dir(), "tls")
     cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
     if os.path.exists(cert) and os.path.exists(key):
-        return cert, key
+        st = os.lstat(key)
+        if st.st_uid == os.getuid() and not (st.st_mode & 0o077) and not os.path.islink(key):
+            return cert, key
+        os.remove(key)                 # someone else's or too open: make a new one
+        os.remove(cert)
     os.makedirs(d, mode=0o700, exist_ok=True)
     os.chmod(d, 0o700)
     old = os.umask(0o077)

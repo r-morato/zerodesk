@@ -84,6 +84,7 @@ async def security_mw(request, handler):
         h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        h["Server"] = "ZeroDesk"
         if path.startswith("/api/") or path in ("/", "/login"):
             h.setdefault("Cache-Control", "no-store")
     return resp
@@ -105,6 +106,8 @@ async def api_pair(request):
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
+        body = None
+    if not isinstance(body, dict):
         return _json_error(400, "Bad request")
     token, err = ctx.guard.pair(str(body.get("code", ""))[:32], request.remote)
     if not token:
@@ -163,21 +166,38 @@ async def files_preview(request):
 
 
 async def files_download(request):
-    path, size = await _files_call(F.open_for_download, request.query.get("path"))
-    name = os.path.basename(path)
+    try:
+        fh, name, size = await _run(F.open_download, request.query.get("path"))
+    except F.FileError as e:
+        return _json_error(400, str(e))
     quoted = urllib.parse.quote(name, safe="")
-    return web.FileResponse(path, headers={
+    resp = web.StreamResponse(headers={
         "Content-Type": "application/octet-stream",
         "Content-Disposition": "attachment; filename*=UTF-8''%s" % quoted,
-        "Cache-Control": "no-store"})
+        "Content-Length": str(size), "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox"})
+    try:
+        await resp.prepare(request)
+        while True:
+            chunk = await _run(fh.read, 256 * 1024)
+            if not chunk:
+                break
+            await resp.write(chunk)
+        await resp.write_eof()
+    finally:
+        fh.close()
+    return resp
 
 
 async def _body(request):
     try:
-        return await request.json()
+        b = await request.json()
     except (ValueError, UnicodeDecodeError):
+        b = None
+    if not isinstance(b, dict):
         raise web.HTTPBadRequest(text=json.dumps({"error": "Bad request"}),
                                  content_type="application/json")
+    return b
 
 
 async def files_mkdir(request):
@@ -230,7 +250,10 @@ async def files_upload(request):
                     if size > MAX_UPLOAD:
                         raise F.FileError("File is larger than 2 GB")
                     await _run(fh.write, chunk)
-            os.replace(tmp, final)
+            if overwrite:
+                os.replace(tmp, final)
+            else:
+                F.place_no_replace(tmp, final)
         except (OSError, F.FileError) as e:
             try:
                 os.remove(tmp)
@@ -256,7 +279,7 @@ async def apps_list(request):
 
 async def apps_icon(request):
     ctx = request.app["ctx"]
-    apps = list_apps(ctx.apps_root) if ctx.apps_root else list_apps()
+    apps = await _run(list_apps, ctx.apps_root) if ctx.apps_root else await _run(list_apps)
     app = next((a for a in apps if a["id"] == request.match_info["app_id"]), None)
     p = app and (icon_path(app, ctx.apps_root) if ctx.apps_root else icon_path(app))
     if not p:
@@ -264,7 +287,7 @@ async def apps_icon(request):
     ctype = "image/svg+xml" if p.endswith(".svg") else "image/jpeg" if p.endswith((".jpg", ".jpeg")) \
         else "image/png"
     return web.FileResponse(p, headers={"Content-Type": ctype, "Cache-Control": "max-age=3600",
-                                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+                                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
 
 
 async def apps_start(request):
@@ -285,6 +308,22 @@ async def apps_stop(request):
 
 
 # ------------------------------------------------------------------ websockets
+def _ws_json(data):
+    try:
+        m = json.loads(data)
+    except ValueError:
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
+def _touch(request):
+    """Websocket activity counts as using the app (at most every 30 s)."""
+    s = request["session"]
+    now = time.monotonic()
+    if now - s.last_seen > 30:
+        request.app["ctx"].guard.check(s.token, touch=True)
+
+
 async def _session_watch(request, ws):
     """Close the socket if the session is revoked or expires."""
     ctx = request.app["ctx"]
@@ -294,6 +333,9 @@ async def _session_watch(request, ws):
         if not ctx.guard.check(token, touch=False):
             await ws.close(code=4401, message=b"session ended")
             return
+
+
+OUT_HIGH = 512 * 1024        # stop reading the shell when this much output is waiting
 
 
 async def ws_shell(request):
@@ -309,7 +351,7 @@ async def ws_shell(request):
     except ValueError:
         cols, rows = 80, 24
     try:
-        sh = ctx.shell_factory(cols, rows)
+        sh = await _run(ctx.shell_factory, cols, rows)
     except OSError as e:
         await ws.send_str(json.dumps({"type": "error", "message": str(e)}))
         await ws.close()
@@ -317,6 +359,17 @@ async def ws_shell(request):
     ctx.shells += 1
     loop = asyncio.get_running_loop()
     out_q = asyncio.Queue()
+    state = {"queued": 0, "reading": False, "writing": False}
+
+    def start_reading():
+        if not state["reading"] and not sh.closed:
+            loop.add_reader(sh.master, on_readable)
+            state["reading"] = True
+
+    def stop_reading():
+        if state["reading"]:
+            loop.remove_reader(sh.master)
+            state["reading"] = False
 
     def on_readable():
         data = sh.read()
@@ -324,9 +377,23 @@ async def ws_shell(request):
             return
         out_q.put_nowait(data)
         if data == b"":
-            loop.remove_reader(sh.master)
+            stop_reading()
+            return
+        state["queued"] += len(data)
+        if state["queued"] > OUT_HIGH:
+            stop_reading()             # back-pressure: wait for the browser to catch up
 
-    loop.add_reader(sh.master, on_readable)
+    def on_writable():
+        if sh.flush():
+            loop.remove_writer(sh.master)
+            state["writing"] = False
+
+    def send_input(data):
+        if not sh.queue_input(data):
+            return                     # program isn't reading its input: drop the paste
+        if not sh.flush() and not state["writing"]:
+            loop.add_writer(sh.master, on_writable)
+            state["writing"] = True
 
     async def pump():
         while True:
@@ -335,20 +402,22 @@ async def ws_shell(request):
                 await ws.close(code=1000, message=b"shell exited")
                 return
             await ws.send_bytes(data)
+            state["queued"] -= len(data)
+            if state["queued"] < OUT_HIGH // 4:
+                start_reading()
 
+    start_reading()
     pump_task = asyncio.ensure_future(pump())
     watch_task = asyncio.ensure_future(_session_watch(request, ws))
     try:
         async for msg in ws:
+            _touch(request)
             if msg.type == WSMsgType.BINARY:
-                await _run(sh.write, msg.data)
+                send_input(msg.data)
             elif msg.type == WSMsgType.TEXT:
-                try:
-                    m = json.loads(msg.data)
-                except ValueError:
-                    continue
+                m = _ws_json(msg.data)
                 if m.get("type") == "input" and isinstance(m.get("data"), str):
-                    await _run(sh.write, m["data"])
+                    send_input(m["data"])
                 elif m.get("type") == "resize":
                     try:
                         sh.resize(m.get("cols", 80), m.get("rows", 24))
@@ -357,10 +426,11 @@ async def ws_shell(request):
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
-        try:
-            loop.remove_reader(sh.master)
-        except (ValueError, OSError):
-            pass
+        for fn in (stop_reading, lambda: loop.remove_writer(sh.master)):
+            try:
+                fn()
+            except (ValueError, OSError):
+                pass
         pump_task.cancel()
         watch_task.cancel()
         await _run(sh.close)
@@ -397,10 +467,8 @@ async def ws_screen(request):
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
                 continue
-            try:
-                m = json.loads(msg.data)
-            except ValueError:
-                continue
+            _touch(request)
+            m = _ws_json(msg.data)
             if m.get("type") == "key" and kb and isinstance(m.get("code"), str):
                 kb.key(m["code"], bool(m.get("down")))
             elif m.get("type") == "refresh":

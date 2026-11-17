@@ -2,9 +2,10 @@
 decide what can be read or changed."""
 
 import os
+import secrets
 import shutil
 import stat
-import time
+import tempfile
 
 PREVIEW_TEXT_MAX = 512 * 1024
 
@@ -74,6 +75,21 @@ def open_for_download(path):
     return path, st.st_size
 
 
+def open_download(path):
+    """Open the exact file asked for and check it *after* opening (no races,
+    no substitution). Returns (file object, name, size)."""
+    path = clean_path(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    except OSError as e:
+        raise _err(e)
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise FileError("Not a regular file")
+    return os.fdopen(fd, "rb"), os.path.basename(path), st.st_size
+
+
 def preview_text(path):
     path, size = open_for_download(path)
     with open(path, "rb") as fh:
@@ -85,16 +101,25 @@ def preview_text(path):
 
 
 def save_text(path, text):
-    path = clean_path(path)
-    if len(text.encode("utf-8")) > PREVIEW_TEXT_MAX:
+    """Atomic save that writes *through* symlinks and keeps the file's mode."""
+    path = os.path.realpath(clean_path(path))
+    data = text.encode("utf-8")
+    if len(data) > PREVIEW_TEXT_MAX:
         raise FileError("File too large to edit here")
     try:
-        mode = stat.S_IMODE(os.stat(path).st_mode) if os.path.exists(path) else 0o644
-        tmp = path + ".zerodesk-tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
+        st = os.stat(path) if os.path.exists(path) else None
+        fd, tmp = tempfile.mkstemp(prefix=".zerodesk-", dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.chmod(tmp, stat.S_IMODE(st.st_mode) if st else 0o644)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
     except OSError as e:
         raise _err(e)
 
@@ -108,13 +133,26 @@ def mkdir(parent, name):
     return p
 
 
+def place_no_replace(src, dst):
+    """Move src to dst without ever overwriting an existing dst."""
+    try:
+        os.link(src, dst)              # fails if dst exists: no race
+        os.unlink(src)
+        return
+    except FileExistsError:
+        raise FileError("'%s' already exists" % os.path.basename(dst))
+    except OSError:
+        pass                           # e.g. FAT filesystems or directories: best effort
+    if os.path.lexists(dst):
+        raise FileError("'%s' already exists" % os.path.basename(dst))
+    os.rename(src, dst)
+
+
 def rename(path, new_name):
     path = clean_path(path)
     dst = os.path.join(os.path.dirname(path), clean_name(new_name))
-    if os.path.lexists(dst):
-        raise FileError("Something with that name already exists")
     try:
-        os.rename(path, dst)
+        place_no_replace(path, dst)
     except OSError as e:
         raise _err(e)
     return dst
@@ -140,4 +178,4 @@ def upload_target(directory, name, overwrite=False):
         raise FileError("'%s' already exists" % name)
     if not os.path.isdir(d):
         raise FileError("Folder not found")
-    return p, "%s.zerodesk-upload-%d" % (p, int(time.time() * 1000))
+    return p, os.path.join(d, ".zerodesk-upload-" + secrets.token_hex(8))

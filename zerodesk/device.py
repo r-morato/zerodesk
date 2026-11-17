@@ -25,7 +25,7 @@ FONT_DIRS = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/TTF",
              "/usr/share/fonts/truetype/jetbrains-mono")
 
 # Linux key codes
-KEY_ESC, KEY_4, KEY_6, KEY_F, KEY_X_, KEY_UP, KEY_DOWN = 1, 5, 7, 33, 45, 103, 108
+KEY_ESC, KEY_4, KEY_6, KEY_8, KEY_F, KEY_X_, KEY_UP, KEY_DOWN = 1, 5, 7, 9, 33, 45, 103, 108
 
 
 def _font(names, size):
@@ -63,8 +63,26 @@ class DeviceScreen:
         self.f_code = _font(["DejaVuSansMono-Bold.ttf", "DejaVuSans-Bold.ttf"], 30)
         self.f_small = _font(["DejaVuSans.ttf"], 11)
         self.viewers = lambda: 0
+        self.show_fp = False
+
+    def render_fingerprint(self):
+        img = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        d = ImageDraw.Draw(img)
+        d.rectangle((0, 0, WIDTH, 20), fill=PANEL)
+        d.text((8, 3), "Certificate fingerprint (SHA-256)", font=self.f_title, fill=TEXT)
+        parts = self.fingerprint.split(":")
+        mono = self.f_url
+        for i in range(4):
+            d.text((10, 28 + i * 20), ":".join(parts[i * 8:(i + 1) * 8]), font=mono, fill=ACCENT)
+        d.text((10, 112), "Compare with your browser's certificate details", font=self.f_small, fill=DIM)
+        d.text((10, 126), "before typing the code on a network you don't trust.", font=self.f_small, fill=DIM)
+        d.line((0, 142, WIDTH, 142), fill=LINE)
+        d.text((10, 150), "8 or Esc: back", font=self.f_small, fill=DIM)
+        return img
 
     def render(self):
+        if self.show_fp:
+            return self.render_fingerprint()
         img = Image.new("RGB", (WIDTH, HEIGHT), BG)
         d = ImageDraw.Draw(img)
         n = self.guard.count()
@@ -95,32 +113,53 @@ class DeviceScreen:
 
         d.text((10, 66), "Pairing code", font=self.f_body, fill=DIM)
         wait = self.guard.lockout_left()
-        if wait > 0:
-            d.text((10, 82), "Paused %ds" % (wait + 1), font=self.f_code, fill=RED)
+        if self.guard.stopped:
+            d.text((10, 84), "Paused", font=self.f_code, fill=RED)
+            d.text((120, 86), "Too many wrong codes.", font=self.f_small, fill=RED)
+            d.text((120, 100), "Press 4 to start again.", font=self.f_small, fill=TEXT)
+        elif wait > 0:
+            d.text((10, 82), "Wait %ds" % (wait + 1), font=self.f_code, fill=AMBER)
         else:
             code = self.guard.code
             d.text((10, 80), code[:3] + " " + code[3:], font=self.f_code, fill=TEXT)
-        fp = self.fingerprint.replace(":", "")[-8:] if self.fingerprint else ""
-        if fp:
-            t = "Certificate ends " + ":".join(fp[i:i + 2] for i in range(0, 8, 2))
-            d.text((WIDTH - 10 - _w(d, t, self.f_small), 120), t, font=self.f_small, fill=DIM)
+        # who's here: shown so an unexpected browser stands out
+        info = None
+        if self.guard.last_bad and not self.guard.stopped:
+            info = ("Wrong code from " + self.guard.last_bad, AMBER)
+        remotes = self.guard.remotes()
+        if remotes:
+            info = ("Paired: " + ", ".join(remotes[:2]) + ("…" if len(remotes) > 2 else ""), DIM)
         if self.message and time.monotonic() < self.message[2]:
-            d.text((10, 120), self.message[0], font=self.f_small, fill=self.message[1])
+            info = self.message[:2]
+        if info:
+            d.text((10, 120), info[0], font=self.f_small, fill=info[1])
+        fp = self.fingerprint.replace(":", "")[-16:] if self.fingerprint else ""
+        if fp and wait <= 0 and not self.guard.stopped:
+            t = ":".join(fp[i:i + 4] for i in range(0, 16, 4))
+            d.text((WIDTH - 10 - _w(d, t, self.f_small), 72), t, font=self.f_small, fill=DIM)
+            lab = "certificate"
+            d.text((WIDTH - 10 - _w(d, lab, self.f_small), 86), lab, font=self.f_small, fill=DIM)
 
         d.line((0, 136, WIDTH, 136), fill=LINE)
-        for label, x in (("New code", KEY_X[0]), ("Sign out all", KEY_X[2])):
+        for label, x in (("New code", KEY_X[0]), ("Sign out all", KEY_X[2]), ("Certificate", KEY_X[4])):
             w = _w(d, label, self.f_small)
             d.text((x - w // 2, 141), label, font=self.f_small, fill=TEXT)
             d.line((x, 156, x, HEIGHT - 1), fill=DIM)
         q = "Esc: quit"
-        d.text((WIDTH - 10 - _w(d, q, self.f_small), 150), q, font=self.f_small, fill=DIM)
+        d.text((KEY_X[0] + 28, 154), q, font=self.f_small, fill=DIM)
         return img
 
     def flash(self, text, color):
         self.message = (text, color, time.monotonic() + 3)
 
     def handle(self, code):
-        if code == KEY_ESC:
+        if self.show_fp:
+            if code in (KEY_8, KEY_ESC):
+                self.show_fp = False
+            return
+        if code == KEY_8:
+            self.show_fp = True
+        elif code == KEY_ESC:
             self.running = False
         elif code == KEY_4:
             self.guard.new_code()
@@ -147,6 +186,7 @@ class DeviceScreen:
                 app_was_running = False
                 self.keys.drain()
                 last_draw = 0
+            self.guard.tick()
             for code in self.keys.poll(0.5):
                 self.handle(code)
                 last_draw = 0

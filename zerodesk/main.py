@@ -127,7 +127,8 @@ def run_dev(port):
         def force_next(self):
             pass
 
-    cert, key = ensure_cert(os.environ.get("ZERODESK_DEV_DIR", "/tmp/zerodesk-dev"))
+    from .tls import config_dir
+    cert, key = ensure_cert(os.environ.get("ZERODESK_DEV_DIR", config_dir() + "-dev"))
     guard = Guard()
     print("ZeroDesk dev server on https://127.0.0.1:%d  code: %s" % (port, guard.code))
     root = os.environ.get("ZERODESK_APPS_ROOT")
@@ -155,10 +156,14 @@ def run_sim(outdir):
                      8443, "AB:" * 31 + "7F", None, None)
     s.render().save(os.path.join(outdir, "device.png"))
     s.render().resize((960, 510), 0).save(os.path.join(outdir, "device@3x.png"))
-    g.sessions["x"] = None
     g.count = lambda: 1
+    g.remotes = lambda: ["192.168.1.23"]
     s.viewers = lambda: 1
     s.render().resize((960, 510), 0).save(os.path.join(outdir, "device-connected@3x.png"))
+    s.show_fp = True
+    s.fingerprint = ":".join("%02X" % ((i * 37 + 11) % 256) for i in range(32))
+    s.render().resize((960, 510), 0).save(os.path.join(outdir, "device-cert@3x.png"))
+    s.render().save(os.path.join(outdir, "device-cert.png"))
     print("saved to", outdir)
     return 0
 

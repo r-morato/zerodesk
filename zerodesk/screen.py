@@ -101,11 +101,30 @@ class RemoteKeyboard:
         self.ui = UInput({ecodes.EV_KEY: sorted(self.codes.values())}, name=UINPUT_NAME)
         self.down = set()
 
+    MODS_CTRL = ("KEY_LEFTCTRL", "KEY_RIGHTCTRL")
+    MODS_ALT = ("KEY_LEFTALT", "KEY_RIGHTALT")
+    ALT_BLOCKED = {"KEY_LEFT", "KEY_RIGHT"} | {"KEY_F%d" % i for i in range(1, 13)}
+
+    def _held(self, names):
+        return any(self.codes.get(n) in self.down for n in names)
+
+    def blocked(self, name):
+        """Combinations that act on the whole system rather than the app:
+        Ctrl+Alt+Del (reboot) and Alt/Ctrl+Alt + F-keys or arrows (switch to
+        another console)."""
+        if not self._held(self.MODS_ALT):
+            return False
+        if name == "KEY_DELETE" and self._held(self.MODS_CTRL):
+            return True
+        return name in self.ALT_BLOCKED
+
     def key(self, browser_code, pressed):
         name = BROWSER_KEYS.get(browser_code)
         if not name:
             return False
         code = self.codes[name]
+        if pressed and self.blocked(name):
+            return False
         if pressed:
             self.down.add(code)
         else:

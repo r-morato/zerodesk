@@ -33,18 +33,35 @@ class TestGuard(unittest.TestCase):
         self.assertNotEqual(g.code, code)
         self.assertEqual(g.pair(code, "192.168.1.3"), (None, "Wrong code."))
 
-    def test_lockout_and_new_code_after_failures(self):
+    def test_brute_force_is_capped_until_physical_reset(self):
+        clock = Clock()
+        g = S.Guard(clock)
+        guesses = 0
+        for lockout in range(S.MAX_LOCKOUTS):
+            for _ in range(S.MAX_FAILURES):
+                wrong = "000000" if g.code != "000000" else "111111"
+                g.pair(wrong, "10.0.0.66")
+                guesses += 1
+            if lockout < S.MAX_LOCKOUTS - 1:
+                self.assertIsNone(g.pair(g.code, "x")[0])          # paused: even the right code waits
+                clock.t += S.LOCKOUT_SECONDS * 2 ** lockout + 1   # delays grow
+        self.assertTrue(g.stopped)
+        clock.t += 10 ** 6                                          # time alone doesn't help
+        tok, err = g.pair(g.code, "x")
+        self.assertIsNone(tok)
+        self.assertIn("Press 4", err)
+        self.assertEqual(guesses, S.MAX_FAILURES * S.MAX_LOCKOUTS)
+        self.assertEqual(g.last_bad, "10.0.0.66")
+        g.new_code()                                                # key on the Cardputer
+        self.assertIsNotNone(g.pair(g.code, "x")[0])
+
+    def test_code_expires(self):
         clock = Clock()
         g = S.Guard(clock)
         code = g.code
-        for _ in range(S.MAX_FAILURES - 1):
-            self.assertEqual(g.pair("000000" if code != "000000" else "111111", "x")[1], "Wrong code.")
-        tok, err = g.pair("999999" if code != "999999" else "111111", "x")
-        self.assertIn("new code", err)
-        self.assertNotEqual(g.code, code)
-        tok, err = g.pair(g.code, "x")              # even the right code waits out the lockout
-        self.assertIsNone(tok)
-        clock.t += S.LOCKOUT_SECONDS + 1
+        clock.t += S.CODE_LIFETIME + 1
+        self.assertIn("expired", g.pair(code, "x")[1])
+        g.tick()
         self.assertIsNotNone(g.pair(g.code, "x")[0])
 
     def test_sessions_expire_and_revoke(self):
@@ -76,7 +93,7 @@ class TestGuard(unittest.TestCase):
         for ok in ("192.168.1.5:8443", "127.0.0.1:8443", "[fe80::1]:8443", "cardputer.local:8443", "localhost"):
             self.assertTrue(S.host_ok(ok), ok)
         for bad in ("evil.com", "evil.com:8443", "192.168.1.5.evil.com", "999.1.1.1:8443", "", None,
-                    "a.local.evil.com:8443"):
+                    "a.local.evil.com:8443", "[1:2]:8443", "[:::::]:8443", "192.168.1.5.:8443"):
             self.assertFalse(S.host_ok(bad), bad)
 
     def test_origin(self):
@@ -95,8 +112,15 @@ class TestFiles(unittest.TestCase):
             lst = F.listdir(d)
             self.assertEqual(lst["entries"][0]["name"], "a")
             self.assertEqual(F.preview_text(os.path.join(d, "a", "t.txt"))["text"], "hi")
-            F.save_text(os.path.join(d, "a", "t.txt"), "new")
-            self.assertEqual(open(os.path.join(d, "a", "t.txt")).read(), "new")
+            os.symlink(os.path.join(d, "a", "t.txt"), os.path.join(d, "link.txt"))
+            F.save_text(os.path.join(d, "link.txt"), "new")            # writes through the link
+            self.assertTrue(os.path.islink(os.path.join(d, "link.txt")))
+            with open(os.path.join(d, "a", "t.txt")) as fh:
+                self.assertEqual(fh.read(), "new")
+            os.remove(os.path.join(d, "link.txt"))
+            open(os.path.join(d, "a", "u.txt"), "w").close()
+            with self.assertRaises(F.FileError):
+                F.rename(os.path.join(d, "a", "u.txt"), "t.txt")      # never overwrites
             F.rename(os.path.join(d, "a"), "b")
             F.delete(os.path.join(d, "b"))
             self.assertEqual(F.listdir(d)["entries"], [])
@@ -154,6 +178,70 @@ class TestApps(unittest.TestCase):
             self.assertIsNone(r.running())
 
 
+class TestShellSafety(unittest.TestCase):
+    def test_close_kills_background_jobs(self):
+        from zerodesk.shell import Shell, _alive
+        import time
+        sh = Shell()
+        sh.write("sleep 7777 & setsid -w sleep 7778 & sleep 7779\n")
+        time.sleep(0.8)
+        pids = [p for p in sh._session_pids() if p != sh.proc.pid]
+        self.assertTrue(pids)
+        sh.close()
+        time.sleep(0.3)
+        self.assertFalse([p for p in pids if _alive(p)])
+
+    def test_input_is_bounded_and_never_blocks(self):
+        from zerodesk.shell import MAX_PENDING_INPUT, Shell
+        import time
+        sh = Shell()
+        sh.write("stty raw -echo; sleep 30\n")
+        time.sleep(0.5)
+        t = time.monotonic()
+        accepted = 0
+        while sh.queue_input(b"x" * 65536):
+            accepted += 65536
+            sh.flush()
+        self.assertLess(time.monotonic() - t, 2)          # no blocking
+        self.assertLessEqual(len(sh.pending), MAX_PENDING_INPUT)
+        sh.close()
+
+
+class TestKeyFilter(unittest.TestCase):
+    def test_system_combos_blocked(self):
+        from zerodesk.screen import RemoteKeyboard
+
+        class E:
+            EV_KEY = 1
+        kb = RemoteKeyboard.__new__(RemoteKeyboard)
+        kb.e = E()
+        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A"]
+        kb.codes = {n: i + 10 for i, n in enumerate(names)}
+        sent = []
+
+        class UI:
+            def write(self, t, c, v):
+                sent.append((c, v))
+
+            def syn(self):
+                pass
+        kb.ui, kb.down = UI(), set()
+        import zerodesk.screen as scr
+        old = scr.BROWSER_KEYS
+        scr.BROWSER_KEYS = {"C": "KEY_LEFTCTRL", "A": "KEY_LEFTALT", "Del": "KEY_DELETE",
+                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A"}
+        try:
+            kb.key("C", True); kb.key("A", True)
+            self.assertFalse(kb.key("Del", True))       # Ctrl+Alt+Del
+            self.assertFalse(kb.key("F2", True))        # console switch
+            self.assertFalse(kb.key("L", True))
+            self.assertTrue(kb.key("X", True))          # ordinary keys still work
+            kb.key("A", False)
+            self.assertTrue(kb.key("Del", True))        # Ctrl+Del alone is fine
+        finally:
+            scr.BROWSER_KEYS = old
+
+
 class TestImage(unittest.TestCase):
     def test_rgb565_decode(self):
         from zerodesk.screen import Framebuffer
@@ -166,7 +254,14 @@ class TestImage(unittest.TestCase):
 
 class FakeShell:
     def __init__(self, cols, rows):
-        self.master = os.open(os.devnull, os.O_RDONLY)
+        self.master, self._w = os.pipe()
+        self.closed = False
+
+    def queue_input(self, d):
+        return True
+
+    def flush(self):
+        return True
 
     def read(self):
         return None
@@ -178,7 +273,9 @@ class FakeShell:
         pass
 
     def close(self):
+        self.closed = True
         os.close(self.master)
+        os.close(self._w)
 
 
 class TestServer_(unittest.TestCase):
@@ -237,13 +334,24 @@ class TestServer_(unittest.TestCase):
                 r = await c.get("/ws/shell", headers=dict(h, Origin="https://evil.com", Upgrade="websocket",
                                                           Connection="Upgrade", **ck))
                 self.assertEqual(r.status, 403)
-                # downloads are always attachments
-                with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as fh:
-                    fh.write("<script>alert(1)</script>")
-                r = await c.get("/api/files/download", params={"path": fh.name}, headers=dict(h, **ck))
-                self.assertEqual(r.headers["Content-Type"], "application/octet-stream")
-                self.assertTrue(r.headers["Content-Disposition"].startswith("attachment"))
-                os.remove(fh.name)
+                # downloads are always attachments, and exactly the file asked for
+                with tempfile.TemporaryDirectory() as dd:
+                    fp = os.path.join(dd, "page.html")
+                    with open(fp, "w") as fh:
+                        fh.write("<script>alert(1)</script>")
+                    with open(fp + ".gz", "wb") as fh:
+                        fh.write(b"\x1f\x8bDIFFERENT")
+                    r = await c.get("/api/files/download", params={"path": fp},
+                                    headers=dict(h, **ck, **{"Accept-Encoding": "gzip"}))
+                    self.assertEqual(r.headers["Content-Type"], "application/octet-stream")
+                    self.assertTrue(r.headers["Content-Disposition"].startswith("attachment"))
+                    self.assertNotIn("Content-Encoding", r.headers)
+                    self.assertEqual(await r.read(), b"<script>alert(1)</script>")
+                # malformed JSON shapes are 400, not 500
+                r = await c.post("/api/pair", data="[1]", headers=dict(h, Origin=self.ORIGIN,
+                                 **{"Content-Type": "application/json"}))
+                self.assertEqual(r.status, 400)
+                self.assertNotIn("Python", r.headers.get("Server", ""))
                 # logout ends the session
                 r = await c.post("/api/logout", headers=dict(h, Origin=self.ORIGIN, **ck))
                 self.assertEqual(r.status, 200)

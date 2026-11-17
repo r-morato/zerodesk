@@ -97,7 +97,10 @@ class Runner:
             app = next((a for a in list_apps(self.root) if a["id"] == app_id), None)
             if not app:
                 raise AppError("App not found")
-            argv = exec_argv(app["exec"])
+            try:
+                argv = exec_argv(app["exec"])
+            except ValueError:
+                raise AppError("This app's launcher entry is broken")
             if not argv:
                 raise AppError("App has no command")
             self.on_change(starting=True)
