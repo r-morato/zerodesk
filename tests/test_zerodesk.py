@@ -564,6 +564,29 @@ class TestFeatures(unittest.TestCase):
         for bad in ("a\x00b", "a\nb", "", "x" * 300, None):
             self.assertFalse(admin.valid_password(bad))
 
+    def test_zerodesk_screen_listens_to_browser_keys(self):
+        """ZeroDesk's own screen reads the virtual keyboard as well as the real one."""
+        import types
+        from unittest import mock
+        from zerodesk import device
+        from zerodesk.screen import UINPUT_NAME
+
+        class Dev:
+            def __init__(self, path):
+                self.path, self.fd = path, 0
+                self.name = {"/a": "cardputer-keyboard", "/b": UINPUT_NAME, "/c": "power-button"}[path]
+
+            def capabilities(self):
+                return {1: [1, 28] if self.path != "/c" else [116]}     # ESC, ENTER / POWER
+
+            def close(self):
+                pass
+        fake = types.SimpleNamespace(InputDevice=Dev, list_devices=lambda: ["/a", "/b", "/c"],
+                                     ecodes=types.SimpleNamespace(EV_KEY=1, KEY_ESC=1, KEY_ENTER=28))
+        with mock.patch.dict(sys.modules, {"evdev": fake}):
+            keys = device.PhysicalKeys()
+        self.assertEqual(sorted(d.name for d in keys.devices), sorted(["cardputer-keyboard", UINPUT_NAME]))
+
     def test_virtual_keyboard_is_ordinary(self):
         """No SysRq on the virtual keyboard (see RemoteKeyboard)."""
         from zerodesk.screen import BROWSER_KEYS

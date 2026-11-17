@@ -8,7 +8,6 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 from .display import HEIGHT, WIDTH
-from .screen import UINPUT_NAME
 
 BG = (15, 42, 37)        # solder-mask green, same as the web interface
 PANEL = (21, 54, 48)
@@ -211,7 +210,10 @@ class DeviceScreen:
 
 
 class PhysicalKeys:
-    """Key presses from the Cardputer's own keyboard (never the remote one)."""
+    """Key presses from the Cardputer's keyboard, and from the browser's
+    virtual keyboard too, so paired browsers can use New code, Sign out all
+    and Certificate. (A paired browser already has a full shell, so this
+    gives it nothing new; unpaired browsers can't send keys at all.)"""
 
     def __init__(self):
         from evdev import InputDevice, ecodes, list_devices
@@ -221,9 +223,6 @@ class PhysicalKeys:
             try:
                 dev = InputDevice(path)
             except OSError:
-                continue
-            if dev.name == UINPUT_NAME:
-                dev.close()
                 continue
             caps = dev.capabilities().get(ecodes.EV_KEY, [])
             if ecodes.KEY_ESC in caps or ecodes.KEY_ENTER in caps:
