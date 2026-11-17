@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroDesk</title>
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/static/icon.svg" alt=""><span>ZeroDesk</span>
+    <span id="hostname" class="muted"></span></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" class="active">Overview</button>
+    <button role="tab" data-tab="screen">Screen</button>
+    <button role="tab" data-tab="shell">Shell</button>
+    <button role="tab" data-tab="files">Files</button>
+  </nav>
+  <div class="top-right"><span id="conn" class="dot ok" title="Connected"></span>
+    <button id="logout" class="ghost">Sign out</button></div>
+</header>
+
+<main>
+  <!-- Overview -->
+  <section id="tab-overview" class="tab active">
+    <div class="grid">
+      <div class="card wide">
+        <div class="card-head"><h2>CPU</h2><span id="cpu-total" class="big">–</span></div>
+        <canvas id="cpu-chart" height="70"></canvas>
+        <div id="cpu-cores" class="cores"></div>
+      </div>
+      <div class="card"><h2>Memory</h2><div class="big" id="mem-pct">–</div>
+        <div class="bar"><span id="mem-bar"></span></div><div class="muted small" id="mem-text"></div></div>
+      <div class="card"><h2>Storage</h2><div class="big" id="disk-pct">–</div>
+        <div class="bar"><span id="disk-bar"></span></div><div class="muted small" id="disk-text"></div></div>
+      <div class="card"><h2>Battery</h2><div class="big" id="bat">–</div>
+        <div class="bar"><span id="bat-bar"></span></div><div class="muted small" id="bat-text"></div></div>
+      <div class="card"><h2>Temperature</h2><div class="big" id="temp">–</div>
+        <div class="muted small" id="uptime"></div><div class="muted small" id="load"></div></div>
+      <div class="card wide"><h2>Network</h2><table class="table" id="net"></table></div>
+      <div class="card wide"><h2>Top processes</h2>
+        <table class="table" id="procs"><thead><tr><th>Name</th><th>PID</th><th class="num">CPU</th><th class="num">Memory</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- Screen -->
+  <section id="tab-screen" class="tab">
+    <div class="screen-layout">
+      <div class="screen-col">
+        <div class="device">
+          <canvas id="screen" width="320" height="170" tabindex="0" aria-label="Cardputer screen"></canvas>
+          <div id="screen-overlay" class="overlay">Click the screen to type</div>
+        </div>
+        <div class="keys" id="soft-keys">
+          <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button>
+          <button data-key="ArrowUp">↑</button><button data-key="ArrowDown">↓</button>
+          <button data-key="ArrowLeft">←</button><button data-key="ArrowRight">→</button>
+          <button data-key="Enter">Enter</button>
+          <span class="sep"></span>
+          <button data-key="Digit4">4</button><button data-key="Digit5">5</button><button data-key="Digit6">6</button><button data-key="Digit7">7</button><button data-key="Digit8">8</button>
+        </div>
+        <p id="kb-note" class="note hidden"></p>
+        <p class="muted small">Click the screen to type on the Cardputer. Click anywhere else to stop.</p>
+      </div>
+      <div class="apps-col">
+        <div class="card-head"><h2>Apps</h2><button id="apps-refresh" class="ghost small">Refresh</button></div>
+        <div id="running" class="running hidden"><span></span><button id="app-stop" class="danger small">Stop</button></div>
+        <div id="apps" class="apps"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Shell -->
+  <section id="tab-shell" class="tab">
+    <div class="shell-bar"><span id="shell-status" class="muted small">Not connected</span>
+      <button id="shell-reconnect" class="ghost small">Reconnect</button></div>
+    <div id="terminal"></div>
+  </section>
+
+  <!-- Files -->
+  <section id="tab-files" class="tab">
+    <div class="files-bar">
+      <button id="f-up" class="ghost small" title="Up a folder">↑ Up</button>
+      <button id="f-home" class="ghost small">Home</button>
+      <div id="crumbs" class="crumbs"></div>
+      <span class="spacer"></span>
+      <button id="f-mkdir" class="ghost small">New folder</button>
+      <label class="button primary small">Upload<input id="f-upload" type="file" multiple hidden></label>
+    </div>
+    <div class="files-layout">
+      <div id="dropzone" class="files-list">
+        <table class="table files"><thead><tr><th>Name</th><th class="num">Size</th><th>Modified</th><th></th></tr></thead><tbody id="f-rows"></tbody></table>
+        <div id="f-empty" class="muted small empty hidden">This folder is empty. Drop files here to upload.</div>
+      </div>
+      <aside id="preview" class="preview hidden">
+        <div class="card-head"><h2 id="pv-name"></h2><button id="pv-close" class="ghost small">Close</button></div>
+        <img id="pv-img" alt="" class="hidden">
+        <textarea id="pv-text" class="hidden" spellcheck="false"></textarea>
+        <div class="pv-actions"><button id="pv-save" class="primary small hidden">Save</button>
+          <button id="pv-download" class="ghost small">Download</button></div>
+        <p id="pv-note" class="muted small"></p>
+      </aside>
+    </div>
+    <div id="upload-progress" class="toast hidden"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden" role="status"></div>
+<dialog id="dlg"><form method="dialog"><p id="dlg-msg"></p><input id="dlg-input" class="hidden">
+  <menu><button value="cancel" class="ghost">Cancel</button><button value="ok" id="dlg-ok" class="primary">OK</button></menu></form></dialog>
+
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/addon-fit.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

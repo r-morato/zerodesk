@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ZeroDesk
+Comment=Control your Cardputer from a browser on your network
+Exec=/usr/share/APPLaunch/bin/zerodesk
+Icon=share/images/zerodesk.png
+Terminal=false
+Categories=System;
+StartupNotify=false

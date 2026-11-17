@@ -1,0 +1,5 @@
+# ZeroDesk: let members of the "input" group create a virtual keyboard, so a
+# paired browser can type into apps on the Cardputer screen. Members of that
+# group can already read every key press; this lets them send them too.
+# Takes effect after a reboot.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

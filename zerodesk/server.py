@@ -1,0 +1,444 @@
+"""The HTTPS web server: login with the on-screen code, then stats, shell,
+files and the live screen."""
+
+import asyncio
+import json
+import os
+import time
+import urllib.parse
+import zlib
+
+from aiohttp import WSMsgType, web
+
+from . import files as F
+from .apps import AppError, icon_path, list_apps
+from .screen import to_png
+from .security import COOKIE, ABSOLUTE_TIMEOUT, host_ok, is_local_address, origin_ok
+
+WEB_ROOT = os.environ.get("ZERODESK_WEB") or os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "web")
+MAX_UPLOAD = 2 * 1024 ** 3
+MAX_SHELLS = 4
+PUBLIC_PATHS = ("/login", "/api/pair", "/static/")
+
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; "
+       "font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; "
+       "frame-ancestors 'none'")
+
+
+def _json_error(status, msg):
+    return web.json_response({"error": msg}, status=status)
+
+
+class Context:
+    """Everything the handlers need, so tests can swap parts out."""
+
+    def __init__(self, guard, stats, runner, fingerprint="", framebuffer=None, keyboard=None,
+                 apps_root=None, shell_factory=None):
+        self.guard = guard
+        self.stats = stats
+        self.runner = runner
+        self.fingerprint = fingerprint
+        self.fb = framebuffer
+        self.keyboard = keyboard
+        self.keyboard_error = None
+        self.apps_root = apps_root
+        if shell_factory is None:
+            from .shell import Shell
+            shell_factory = Shell
+        self.shell_factory = shell_factory
+        self.shells = 0
+        self._stats_cache = (0.0, None)
+        self.viewers = 0
+
+
+# ------------------------------------------------------------------ middleware
+@web.middleware
+async def security_mw(request, handler):
+    ctx = request.app["ctx"]
+    if not is_local_address(request.remote):
+        return web.Response(status=403, text="ZeroDesk only accepts local network connections.")
+    if not host_ok(request.host):
+        return web.Response(status=421, text="Use the address shown on the Cardputer.")
+    path = request.path
+    public = path == "/login" or path.startswith("/static/") or path == "/api/pair"
+    is_ws = request.headers.get("Upgrade", "").lower() == "websocket"
+    if request.method not in ("GET", "HEAD") or is_ws:
+        if not origin_ok(request.headers.get("Origin"), request.host):
+            return _json_error(403, "Bad origin")
+    session = None
+    if not public:
+        session = ctx.guard.check(request.cookies.get(COOKIE))
+        if not session:
+            if path.startswith(("/api/", "/ws/")):
+                return _json_error(401, "Not paired")
+            raise web.HTTPFound("/login")
+    request["session"] = session
+    resp = await handler(request)
+    if isinstance(resp, web.StreamResponse) and not resp.prepared:
+        h = resp.headers
+        h.setdefault("Content-Security-Policy", CSP)
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("X-Frame-Options", "DENY")
+        h.setdefault("Referrer-Policy", "no-referrer")
+        h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if path.startswith("/api/") or path in ("/", "/login"):
+            h.setdefault("Cache-Control", "no-store")
+    return resp
+
+
+# ------------------------------------------------------------------ pages
+async def page_index(request):
+    return web.FileResponse(os.path.join(WEB_ROOT, "index.html"))
+
+
+async def page_login(request):
+    if request.app["ctx"].guard.check(request.cookies.get(COOKIE), touch=False):
+        raise web.HTTPFound("/")
+    return web.FileResponse(os.path.join(WEB_ROOT, "login.html"))
+
+
+async def api_pair(request):
+    ctx = request.app["ctx"]
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        return _json_error(400, "Bad request")
+    token, err = ctx.guard.pair(str(body.get("code", ""))[:32], request.remote)
+    if not token:
+        return _json_error(403, err)
+    resp = web.json_response({"ok": True})
+    resp.set_cookie(COOKIE, token, secure=True, httponly=True, samesite="Strict", path="/",
+                    max_age=ABSOLUTE_TIMEOUT)
+    return resp
+
+
+async def api_logout(request):
+    ctx = request.app["ctx"]
+    ctx.guard.logout(request["session"].token)
+    resp = web.json_response({"ok": True})
+    resp.del_cookie(COOKIE, path="/")
+    return resp
+
+
+async def api_info(request):
+    ctx = request.app["ctx"]
+    running = ctx.runner.running()
+    return web.json_response({
+        "fingerprint": ctx.fingerprint, "sessions": ctx.guard.count(),
+        "screen": ctx.fb is not None,
+        "keyboard": ctx.keyboard is not None, "keyboard_error": ctx.keyboard_error,
+        "running": running and {"id": running["id"], "name": running["name"]}})
+
+
+async def api_stats(request):
+    ctx = request.app["ctx"]
+    t, snap = ctx._stats_cache
+    if snap is None or time.monotonic() - t > 1.0:
+        snap = await asyncio.get_running_loop().run_in_executor(None, ctx.stats.snapshot)
+        ctx._stats_cache = (time.monotonic(), snap)
+    return web.json_response(snap)
+
+
+# ------------------------------------------------------------------ files
+def _run(fn, *a):
+    return asyncio.get_running_loop().run_in_executor(None, fn, *a)
+
+
+async def _files_call(fn, *a):
+    try:
+        return await _run(fn, *a)
+    except F.FileError as e:
+        raise web.HTTPBadRequest(text=json.dumps({"error": str(e)}), content_type="application/json")
+
+
+async def files_list(request):
+    return web.json_response(await _files_call(F.listdir, request.query.get("path")))
+
+
+async def files_preview(request):
+    return web.json_response(await _files_call(F.preview_text, request.query.get("path")))
+
+
+async def files_download(request):
+    path, size = await _files_call(F.open_for_download, request.query.get("path"))
+    name = os.path.basename(path)
+    quoted = urllib.parse.quote(name, safe="")
+    return web.FileResponse(path, headers={
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": "attachment; filename*=UTF-8''%s" % quoted,
+        "Cache-Control": "no-store"})
+
+
+async def _body(request):
+    try:
+        return await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Bad request"}),
+                                 content_type="application/json")
+
+
+async def files_mkdir(request):
+    b = await _body(request)
+    return web.json_response({"path": await _files_call(F.mkdir, b.get("path"), b.get("name"))})
+
+
+async def files_rename(request):
+    b = await _body(request)
+    return web.json_response({"path": await _files_call(F.rename, b.get("path"), b.get("name"))})
+
+
+async def files_delete(request):
+    b = await _body(request)
+    await _files_call(F.delete, b.get("path"))
+    return web.json_response({"ok": True})
+
+
+async def files_save(request):
+    b = await _body(request)
+    text = b.get("text")
+    if not isinstance(text, str):
+        return _json_error(400, "Bad request")
+    await _files_call(F.save_text, b.get("path"), text)
+    return web.json_response({"ok": True})
+
+
+async def files_upload(request):
+    directory = request.query.get("dir")
+    overwrite = request.query.get("overwrite") == "1"
+    reader = await request.multipart()
+    saved = []
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        if part.name != "file" or not part.filename:
+            continue
+        final, tmp = await _files_call(F.upload_target, directory,
+                                       os.path.basename(part.filename), overwrite)
+        size = 0
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "wb") as fh:
+                while True:
+                    chunk = await part.read_chunk(256 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_UPLOAD:
+                        raise F.FileError("File is larger than 2 GB")
+                    await _run(fh.write, chunk)
+            os.replace(tmp, final)
+        except (OSError, F.FileError) as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            msg = str(e) if isinstance(e, F.FileError) else (e.strerror or str(e))
+            return _json_error(400, msg)
+        saved.append({"path": final, "size": size})
+    return web.json_response({"saved": saved})
+
+
+# ------------------------------------------------------------------ apps
+async def apps_list(request):
+    ctx = request.app["ctx"]
+    apps = await _run(list_apps, ctx.apps_root) if ctx.apps_root else await _run(list_apps)
+    running = ctx.runner.running()
+    return web.json_response({
+        "apps": [{"id": a["id"], "name": a["name"], "comment": a["comment"],
+                  "icon": bool(icon_path(a, ctx.apps_root) if ctx.apps_root else icon_path(a))}
+                 for a in apps],
+        "running": running and running["id"]})
+
+
+async def apps_icon(request):
+    ctx = request.app["ctx"]
+    apps = list_apps(ctx.apps_root) if ctx.apps_root else list_apps()
+    app = next((a for a in apps if a["id"] == request.match_info["app_id"]), None)
+    p = app and (icon_path(app, ctx.apps_root) if ctx.apps_root else icon_path(app))
+    if not p:
+        raise web.HTTPNotFound()
+    ctype = "image/svg+xml" if p.endswith(".svg") else "image/jpeg" if p.endswith((".jpg", ".jpeg")) \
+        else "image/png"
+    return web.FileResponse(p, headers={"Content-Type": ctype, "Cache-Control": "max-age=3600",
+                                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+
+
+async def apps_start(request):
+    ctx = request.app["ctx"]
+    try:
+        app = await _run(ctx.runner.start, request.match_info["app_id"])
+    except AppError as e:
+        return _json_error(409, str(e))
+    if ctx.fb:
+        ctx.fb.force_next()
+    return web.json_response({"running": {"id": app["id"], "name": app["name"]}})
+
+
+async def apps_stop(request):
+    ctx = request.app["ctx"]
+    await _run(ctx.runner.stop)
+    return web.json_response({"ok": True})
+
+
+# ------------------------------------------------------------------ websockets
+async def _session_watch(request, ws):
+    """Close the socket if the session is revoked or expires."""
+    ctx = request.app["ctx"]
+    token = request["session"].token
+    while not ws.closed:
+        await asyncio.sleep(5)
+        if not ctx.guard.check(token, touch=False):
+            await ws.close(code=4401, message=b"session ended")
+            return
+
+
+async def ws_shell(request):
+    ctx = request.app["ctx"]
+    ws = web.WebSocketResponse(heartbeat=30, max_msg_size=1024 * 1024)
+    await ws.prepare(request)
+    if ctx.shells >= MAX_SHELLS:
+        await ws.close(code=4429, message=b"too many shells")
+        return ws
+    try:
+        cols = int(request.query.get("cols", 80))
+        rows = int(request.query.get("rows", 24))
+    except ValueError:
+        cols, rows = 80, 24
+    try:
+        sh = ctx.shell_factory(cols, rows)
+    except OSError as e:
+        await ws.send_str(json.dumps({"type": "error", "message": str(e)}))
+        await ws.close()
+        return ws
+    ctx.shells += 1
+    loop = asyncio.get_running_loop()
+    out_q = asyncio.Queue()
+
+    def on_readable():
+        data = sh.read()
+        if data is None:
+            return
+        out_q.put_nowait(data)
+        if data == b"":
+            loop.remove_reader(sh.master)
+
+    loop.add_reader(sh.master, on_readable)
+
+    async def pump():
+        while True:
+            data = await out_q.get()
+            if data == b"":
+                await ws.close(code=1000, message=b"shell exited")
+                return
+            await ws.send_bytes(data)
+
+    pump_task = asyncio.ensure_future(pump())
+    watch_task = asyncio.ensure_future(_session_watch(request, ws))
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                await _run(sh.write, msg.data)
+            elif msg.type == WSMsgType.TEXT:
+                try:
+                    m = json.loads(msg.data)
+                except ValueError:
+                    continue
+                if m.get("type") == "input" and isinstance(m.get("data"), str):
+                    await _run(sh.write, m["data"])
+                elif m.get("type") == "resize":
+                    try:
+                        sh.resize(m.get("cols", 80), m.get("rows", 24))
+                    except (TypeError, ValueError, OSError):
+                        pass
+            elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+                break
+    finally:
+        try:
+            loop.remove_reader(sh.master)
+        except (ValueError, OSError):
+            pass
+        pump_task.cancel()
+        watch_task.cancel()
+        await _run(sh.close)
+        ctx.shells -= 1
+    return ws
+
+
+async def ws_screen(request):
+    ctx = request.app["ctx"]
+    ws = web.WebSocketResponse(heartbeat=30, max_msg_size=64 * 1024)
+    await ws.prepare(request)
+    if not ctx.fb:
+        await ws.send_str(json.dumps({"type": "error", "message": "Screen not available"}))
+        await ws.close()
+        return ws
+    ctx.viewers += 1
+    ctx.guard.changed.set()
+    last_crc = [None]
+
+    async def frames():
+        while not ws.closed:
+            raw = await _run(ctx.fb.raw)
+            crc = zlib.crc32(raw)
+            if crc != last_crc[0]:
+                last_crc[0] = crc
+                png = await _run(lambda: to_png(ctx.fb.image(raw)))
+                await ws.send_bytes(png)
+            await asyncio.sleep(0.08)
+
+    frame_task = asyncio.ensure_future(frames())
+    watch_task = asyncio.ensure_future(_session_watch(request, ws))
+    kb = ctx.keyboard
+    try:
+        async for msg in ws:
+            if msg.type != WSMsgType.TEXT:
+                continue
+            try:
+                m = json.loads(msg.data)
+            except ValueError:
+                continue
+            if m.get("type") == "key" and kb and isinstance(m.get("code"), str):
+                kb.key(m["code"], bool(m.get("down")))
+            elif m.get("type") == "refresh":
+                last_crc[0] = None
+    finally:
+        frame_task.cancel()
+        watch_task.cancel()
+        if kb:
+            kb.release_all()
+        ctx.viewers -= 1
+        ctx.guard.changed.set()
+    return ws
+
+
+# ------------------------------------------------------------------ app
+def make_app(ctx):
+    app = web.Application(middlewares=[security_mw], client_max_size=2 * 1024 * 1024)
+    app["ctx"] = ctx
+    r = app.router
+    r.add_get("/", page_index)
+    r.add_get("/login", page_login)
+    r.add_static("/static/", WEB_ROOT, show_index=False, follow_symlinks=False)
+    r.add_post("/api/pair", api_pair)
+    r.add_post("/api/logout", api_logout)
+    r.add_get("/api/info", api_info)
+    r.add_get("/api/stats", api_stats)
+    r.add_get("/api/files/list", files_list)
+    r.add_get("/api/files/preview", files_preview)
+    r.add_get("/api/files/download", files_download)
+    r.add_post("/api/files/mkdir", files_mkdir)
+    r.add_post("/api/files/rename", files_rename)
+    r.add_post("/api/files/delete", files_delete)
+    r.add_post("/api/files/save", files_save)
+    r.add_post("/api/files/upload", files_upload)
+    r.add_get("/api/apps", apps_list)
+    r.add_get("/api/apps/{app_id}/icon", apps_icon)
+    r.add_post("/api/apps/{app_id}/start", apps_start)
+    r.add_post("/api/apps/stop", apps_stop)
+    r.add_get("/ws/shell", ws_shell)
+    r.add_get("/ws/screen", ws_screen)
+    return app

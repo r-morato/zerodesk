@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroDesk · Pair</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body class="login">
+<main class="pair-card">
+  <img src="/static/icon.svg" alt="" class="pair-logo">
+  <h1>ZeroDesk</h1>
+  <p class="muted">Enter the pairing code shown on your Cardputer.</p>
+  <form id="pair-form" autocomplete="off">
+    <input id="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="7" placeholder="000 000"
+           aria-label="Pairing code" autofocus>
+    <button type="submit" class="primary">Connect</button>
+  </form>
+  <p id="pair-error" class="error" role="alert"></p>
+  <p class="muted small">Each code works once. Press 4 on the Cardputer for a new one.</p>
+</main>
+<script src="/static/login.js"></script>
+</body>
+</html>
