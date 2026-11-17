@@ -16,13 +16,14 @@ chmod 0755 "$STAGE"
 
 APP="$STAGE/usr/share/APPLaunch"
 LIB="$STAGE/usr/lib/$PKG"
-install -d "$LIB/$PKG" "$LIB/web/vendor" "$APP/bin" "$APP/applications" "$APP/share/images" \
+install -d "$LIB/$PKG" "$LIB/web/vendor" "$LIB/web/fonts" "$APP/bin" "$APP/applications" "$APP/share/images" \
            "$STAGE/usr/lib/udev/rules.d" "$STAGE/usr/share/doc/$PKG" "$STAGE/DEBIAN"
 
 install -m 0644 "$ROOT"/zerodesk/*.py "$LIB/$PKG/"
 install -m 0644 "$ROOT/packaging/run.py" "$LIB/run.py"
 install -m 0644 "$ROOT"/web/*.html "$ROOT"/web/*.js "$ROOT"/web/*.css "$ROOT"/web/*.svg "$LIB/web/"
 install -m 0644 "$ROOT"/web/vendor/* "$LIB/web/vendor/"
+install -m 0644 "$ROOT"/web/fonts/* "$LIB/web/fonts/"
 install -m 0755 "$ROOT/packaging/zerodesk.sh" "$APP/bin/$PKG"
 install -m 0644 "$ROOT/packaging/zerodesk.desktop" "$APP/applications/$PKG.desktop"
 install -m 0644 "$ROOT/packaging/zerodesk.png" "$APP/share/images/$PKG.png"

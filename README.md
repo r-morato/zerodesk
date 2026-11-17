@@ -4,7 +4,7 @@
 
 Open ZeroDesk on the Cardputer, type the address it shows into a browser on the same network, and enter the one-time code. You get the Cardputer's live screen (with typing, pasting, screenshots and recordings), a shell, a file browser, app installs from the store, Wi-Fi and VPN controls, and system stats.
 
-![ZeroDesk: stats, files and the pairing screen on the Cardputer](docs/screens.png)
+![ZeroDesk in a browser: the live Cardputer screen and the app store](docs/screens.png)
 
 ## How it works
 

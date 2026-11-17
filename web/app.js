@@ -182,20 +182,20 @@
       const c = canvas.getContext("2d");
       c.scale(dpr, dpr);
       c.clearRect(0, 0, w, h);
-      c.strokeStyle = "#30363d"; c.lineWidth = 1;
+      c.strokeStyle = "#1f463e"; c.lineWidth = 1;
       [0.25, 0.5, 0.75].forEach(f => { c.beginPath(); c.moveTo(0, h * f); c.lineTo(w, h * f); c.stroke(); });
       if (hist.length < 2) return;
       const step = w / 59;
       c.beginPath();
       hist.forEach((v, i) => { const x = w - (hist.length - 1 - i) * step, y = h - v / 100 * h; i ? c.lineTo(x, y) : c.moveTo(x, y); });
-      c.strokeStyle = "#58a6ff"; c.lineWidth = 2; c.stroke();
+      c.strokeStyle = "#e8b54d"; c.lineWidth = 2; c.lineJoin = "round"; c.stroke();
       c.lineTo(w, h); c.lineTo(w - (hist.length - 1) * step, h); c.closePath();
-      c.fillStyle = "rgba(88,166,255,.12)"; c.fill();
+      c.fillStyle = "rgba(232,181,77,.13)"; c.fill();
     }
     async function tick() {
       let s;
       try { s = await api("GET", "/api/stats"); } catch (e) { return; }
-      $("hostname").textContent = s.hostname;
+      $("hostname").textContent = s.hostname; $("host-big").textContent = s.hostname;
       $("cpu-total").textContent = s.cpu.total.toFixed(0) + "%";
       hist.push(s.cpu.total); if (hist.length > 60) hist.shift();
       drawChart();
@@ -207,7 +207,7 @@
       }
       s.cpu.cores.forEach((v, i) => {
         const c = cores.children[i];
-        c.firstChild.textContent = "Core " + i + " · " + v.toFixed(0) + "%";
+        c.firstChild.textContent = "Core " + i + ": " + v.toFixed(0) + "%";
         const bar = c.querySelector(".bar span"); bar.style.width = v + "%";
       });
       const m = s.memory, mp = m.total ? m.used / m.total * 100 : 0;
@@ -223,8 +223,8 @@
         $("bat-text").textContent = s.battery.status || "";
       } else { $("bat").textContent = "–"; $("bat-text").textContent = "No battery info"; }
       $("temp").textContent = s.temperature !== null ? s.temperature.toFixed(1) + " °C" : "–";
-      $("uptime").textContent = "Up " + fmtUptime(s.uptime);
-      $("load").textContent = "Load " + s.load.map(x => x.toFixed(2)).join("  ");
+      $("uptime").textContent = "Running for " + fmtUptime(s.uptime);
+      $("load").textContent = s.load.map(x => x.toFixed(2)).join("  ");
       const net = $("net");
       net.replaceChildren(...s.network.map(n => {
         const tr = el("tr");
@@ -427,13 +427,15 @@
     function init() {
       term = new window.Terminal({
         cursorBlink: true, fontSize: 13, scrollback: 5000, allowProposedApi: false,
-        fontFamily: '"JetBrains Mono", "DejaVu Sans Mono", ui-monospace, Menlo, monospace',
-        theme: { background: "#000000", foreground: "#e6edf3", cursor: "#58a6ff", selectionBackground: "#264f78" },
+        fontFamily: '"IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, Menlo, monospace',
+        theme: { background: "#0b201c", foreground: "#eef3ec", cursor: "#e8b54d", cursorAccent: "#0b201c", selectionBackground: "#2f5e53" },
       });
       fit = new window.FitAddon.FitAddon();
       term.loadAddon(fit);
       term.open($("terminal"));
       fit.fit();
+      // re-measure once the bundled font has loaded, so the grid fits it exactly
+      document.fonts.load('13px "IBM Plex Mono"').then(() => { term.options.fontFamily = term.options.fontFamily; fit.fit(); }).catch(() => {});
       term.onData((d) => { if (ws && ws.readyState === 1) ws.send(enc.encode(d)); });
       term.onResize(({ cols, rows }) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "resize", cols, rows })); });
       window.addEventListener("resize", () => { if (current === "shell") fit.fit(); });
@@ -594,7 +596,9 @@
         const h = el("h3"); h.append(el("span", "", a.title), el("span", "code", a.code)); d.append(h);
         d.append(el("p", "", a.summary));
         const row = el("div", "row");
-        row.append(el("span", "", (a.author ? a.author + " · " : "") + "v" + a.version + " · " + fmtBytes(a.size)));
+        const meta = el("span", "meta");
+        meta.append(el("span", "", a.author ? "by " + a.author : ""), el("span", "", "Version " + a.version + ", " + fmtBytes(a.size)));
+        row.append(meta);
         if (a.installed === a.version) row.append(el("span", "tag", "Installed"));
         else {
           const b = el("button", "primary small", a.installed ? "Update" : "Install");
@@ -687,7 +691,7 @@
           });
           act.append(b);
         } else act.append(el("span", "tag", "Connected"));
-        tr.append(el("td", "", n.ssid), el("td", "num muted", n.signal + "%"), el("td", "muted", n.secure ? "🔒" : "open"), act);
+        tr.append(el("td", "", n.ssid), el("td", "num muted", n.signal + "%"), el("td", "muted", n.secure ? "Secured" : "Open"), act);
         return tr;
       }));
     }

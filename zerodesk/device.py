@@ -10,15 +10,15 @@ from PIL import Image, ImageDraw, ImageFont
 from .display import HEIGHT, WIDTH
 from .screen import UINPUT_NAME
 
-BG = (13, 17, 23)
-PANEL = (22, 27, 34)
-LINE = (48, 54, 61)
-TEXT = (230, 237, 243)
-DIM = (125, 133, 144)
-ACCENT = (88, 166, 255)
-GREEN = (63, 185, 80)
-AMBER = (210, 153, 34)
-RED = (248, 81, 73)
+BG = (15, 42, 37)        # solder-mask green, same as the web interface
+PANEL = (21, 54, 48)
+LINE = (42, 90, 80)
+TEXT = (238, 243, 236)
+DIM = (163, 191, 181)
+ACCENT = (232, 181, 77)  # gold
+GREEN = (123, 224, 165)
+AMBER = (243, 154, 75)
+RED = (255, 122, 107)
 KEY_X = (49, 105, 161, 217, 273)    # centred over keys 4..8
 
 FONT_DIRS = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/TTF",
