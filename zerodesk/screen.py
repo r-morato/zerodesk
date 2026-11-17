@@ -4,6 +4,7 @@ import fcntl
 import io
 import mmap
 import os
+import time
 import struct
 import zlib
 
@@ -164,6 +165,7 @@ class RemoteKeyboard:
         if shift:
             self.key("ShiftLeft", True)
         self.key(browser_code, True)
+        time.sleep(0.004)           # some apps poll the keyboard and miss instant taps
         self.key(browser_code, False)
         if shift:
             self.key("ShiftLeft", False)

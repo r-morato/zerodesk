@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -476,3 +477,96 @@ class TestFeatures(unittest.TestCase):
                 network.join_steps(ssid, psk, None)
         network.join_steps("home", "password1", None)
         network.join_steps("open cafe", "", None)
+
+    def test_wifi_keyfile_and_psk_rules(self):
+        from zerodesk import network
+        with self.assertRaises(network.NetError):
+            network.validate_join("home", "pass\x01word")          # non-printable
+        kf = network.keyfile("Hi;-h", "pa\\ss word", "u-1", sae=True)
+        self.assertIn("ssid=72;105;59;45;104;", kf)               # bytes, no escaping games
+        self.assertIn("psk=pa\\\\ss word", kf)
+        self.assertIn("key-mgmt=sae", kf)
+        self.assertNotIn("wifi-security", network.keyfile("open", "", "u-2"))
+
+    def test_password_never_in_env_or_argv(self):
+        """sudo gets the password on stdin, which is then closed."""
+        from zerodesk import admin
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "sudo")
+            with open(fake, "w") as fh:
+                fh.write('#!/bin/sh\nif [ "$1" = "-n" ]; then echo "a password is required" >&2; exit 1; fi\n'
+                         'echo "ARGS $*"; env | grep -c s3cret; IFS= read -r pw; echo "PW $pw"; '
+                         'echo "REST [$(cat)]"\n')
+            os.chmod(fake, 0o755)
+            old = admin.SUDO
+            admin.SUDO = fake
+            try:
+                p = admin.sudo_popen(["/bin/true"], "s3cret")
+                out = p.communicate(timeout=10)[0].decode()
+            finally:
+                admin.SUDO = old
+        self.assertIn("ARGS -S -k -p  /bin/true", out)
+        self.assertIn("\n0\n", out)              # not in the environment
+        self.assertIn("PW s3cret", out)
+        self.assertIn("REST []", out)            # stdin closed after the password
+        for bad in ("a\x00b", "a\nb", "", "x" * 300, None):
+            self.assertFalse(admin.valid_password(bad))
+
+    def test_password_backoff(self):
+        from zerodesk import admin
+        clock = Clock()
+        p = admin.Passwords(clock)
+        p.failed("tok")
+        self.assertEqual(p.wait("tok"), 0)       # one typo is free
+        p.failed("tok")
+        self.assertGreater(p.wait("tok"), 0)
+        self.assertEqual(p.wait("other"), 0)
+        clock.t += 61
+        self.assertEqual(p.wait("tok"), 0)
+
+    def test_jobs_scoped_and_never_stuck(self):
+        from zerodesk import admin
+        jobs = admin.Jobs()
+
+        def boom(job):
+            raise KeyError("x")
+        job = jobs.start("t", boom, owner="tokA")
+        for _ in range(50):
+            if job.state != "running":
+                break
+            time.sleep(0.02)
+        self.assertEqual(job.state, "failed")
+        self.assertIs(jobs.get(job.id, "tokA"), job)
+        self.assertIsNone(jobs.get(job.id, "tokB"))
+        self.assertFalse(jobs.busy)
+
+    def test_store_entry_validation(self):
+        from zerodesk import packages
+        st = packages.Store()
+        st._cache = (time.time(), {"apps": [
+            {"share_code": "BAD1", "download": {"package": "../../etc/x", "sha256": "a" * 64, "url": "https://github.com/x"}},
+            {"share_code": "BAD2", "download": "nope"},
+            {"share_code": "OK01", "title": 5, "categories": "x", "download": {
+                "package": "good", "sha256": "b" * 64, "url": "https://github.com/x"}}]})
+        for code in ("BAD1", "BAD2"):
+            with self.assertRaises(packages.admin.AdminError):
+                st.entry(code)
+        self.assertEqual(st.entry("OK01")["download"]["package"], "good")
+        apps = st.apps()
+        self.assertEqual([a["package"] for a in apps], ["good"])
+        self.assertEqual(apps[0]["categories"], [])
+        for bad in ("https://evil.com\\@github.com/a", "https://u@github.com/a", "https://[::1]@github.com/"):
+            self.assertFalse(packages._allowed_url(bad), bad)
+
+    def test_remove_refuses_collateral(self):
+        from zerodesk import admin, packages
+        olds = (packages.launcher_packages, packages.priority, packages.removal_plan)
+        packages.launcher_packages = lambda: {"app": "app", "base": "base"}
+        packages.priority = lambda p: ["required", "no"] if p == "base" else ["optional", "no"]
+        packages.removal_plan = lambda p: ["app", "other-thing"]
+        try:
+            for pkg in ("base", "app", "zerodesk"):
+                with self.assertRaises(admin.AdminError):
+                    packages.remove_steps(pkg, None)(admin.Job("t"))
+        finally:
+            packages.launcher_packages, packages.priority, packages.removal_plan = olds

@@ -60,13 +60,14 @@
     return new Promise((resolve) => {
       const d = $("dlg"), inp = $("dlg-input"), ok = $("dlg-ok");
       inp.type = secret ? "password" : "text";
+      inp.autocomplete = "off";
       d.returnValue = "";
       $("dlg-msg").textContent = message;
       inp.classList.toggle("hidden", !withInput);
       inp.value = value || "";
       ok.textContent = okLabel || "OK";
       ok.className = danger ? "danger" : "primary";
-      d.onclose = () => resolve(d.returnValue === "ok" ? (withInput ? inp.value : true) : null);
+      d.onclose = () => { const v = inp.value; inp.value = ""; resolve(d.returnValue === "ok" ? (withInput ? v : true) : null); };
       d.showModal();
       if (withInput) { inp.focus(); inp.select(); }
     });
@@ -79,8 +80,8 @@
     return new Promise((resolve) => {
       const d = $("pw-dlg"), inp = $("pw-input");
       inp.value = "";
-      $("pw-err").textContent = wrong ? "Wrong password, try again." : "";
-      d.onclose = () => resolve(d.returnValue === "ok" && inp.value ? inp.value : null);
+      $("pw-err").textContent = typeof wrong === "string" ? wrong : (wrong ? "Wrong password, try again." : "");
+      d.onclose = () => { const v = inp.value; inp.value = ""; resolve(d.returnValue === "ok" && v ? v : null); };
       d.returnValue = "";
       d.showModal();
       inp.focus();
@@ -104,8 +105,9 @@
         wrong = false;
         try { await api("POST", "/api/admin/password", { password: pw }); }
         catch (e) {
-          if (e.message !== "Wrong password") { toast(e.message, true); return null; }
-          wrong = true;
+          if (e.message === "Wrong password") wrong = true;
+          else if (e.message.startsWith("Too many")) wrong = e.message;
+          else { toast(e.message, true); return null; }
         }
         continue;
       }
@@ -120,9 +122,15 @@
       $("job-title").textContent = title;
       log.textContent = ""; st.textContent = "Working…"; st.className = "small";
       d.showModal();
+      let misses = 0;
       const poll = async () => {
+        if (!d.open) { resolve(false); return; }     // closed: stop polling
         let j;
-        try { j = await api("GET", "/api/jobs/" + jobId); } catch (e) { setTimeout(poll, 2000); return; }
+        try { j = await api("GET", "/api/jobs/" + jobId); misses = 0; }
+        catch (e) {
+          if (++misses > 5) { st.textContent = "Lost track of this job"; st.className = "small bad"; resolve(false); return; }
+          setTimeout(poll, 2000); return;
+        }
         log.textContent = j.log; log.scrollTop = log.scrollHeight;
         if (j.state === "running") { setTimeout(poll, 800); return; }
         st.textContent = j.state === "done" ? "Done" : "Failed: see the log above";

@@ -5,14 +5,23 @@
   "version": "0.1.0",
   "description": "Control your CardputerZero from a browser on your network",
   "store": {
-    "summary": "Control your Cardputer from a browser: screen, shell, files, apps and stats",
-    "description": "Open ZeroDesk and it shows an address and a one-time pairing code. Enter them in a browser on the same network to get a live view of the Cardputer's screen (with typing), a shell, a file browser with upload and download, an app launcher and CPU, memory, battery and network stats. HTTPS only, local network only, runs as your user. Remote typing works after one reboot.",
-    "categories": ["System Tools", "Development"],
-    "screenshots": ["screenshots/device.png"],
+    "summary": "Control your Cardputer from a browser: screen, shell, files, apps and Wi-Fi",
+    "description": "Open ZeroDesk and it shows an address and a one-time pairing code. Enter them in a browser on the same network to get a live view of the Cardputer's screen (typing, paste, screenshots, recordings), a shell, a file browser, store installs, Wi-Fi and VPN controls, and CPU, memory, battery and network stats. HTTPS and local network only; runs as your user; admin actions ask for your password. Remote typing works after one reboot.",
+    "categories": [
+      "System Tools",
+      "Development"
+    ],
+    "screenshots": [
+      "screenshots/device.png",
+      "screenshots/device-cert.png"
+    ],
     "icon": "packaging/icon-256.png",
     "license": "MIT",
     "source_repo": "https://github.com/r-morato/zerodesk",
-    "author": {"github": "r-morato", "display_name": "Roger Morato"},
+    "author": {
+      "github": "r-morato",
+      "display_name": "Roger Morato"
+    },
     "share_code": "ZDSK",
     "permissions": {
       "camera": false,

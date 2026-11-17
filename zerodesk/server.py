@@ -4,7 +4,6 @@ files and the live screen."""
 import asyncio
 import json
 import os
-import re
 import time
 import urllib.parse
 import zlib
@@ -514,15 +513,20 @@ async def admin_password(request):
     ctx = request.app["ctx"]
     b = await _body(request)
     pw = b.get("password")
-    if not isinstance(pw, str) or not pw or len(pw) > 256:
-        return _json_error(400, "Bad request")
+    if not admin.valid_password(pw):
+        return _json_error(400, "That password can't be used")
+    tok = _token(request)
+    wait = ctx.passwords.wait(tok)
+    if wait:
+        return _json_error(429, "Too many wrong passwords. Try again in %d s." % wait)
     try:
         await _run(admin.check_password, pw)
     except admin.NeedPassword:
+        ctx.passwords.failed(tok)
         return _json_error(403, "Wrong password")
     except admin.AdminError as e:
         return _json_error(400, str(e))
-    ctx.passwords.set(_token(request), pw)
+    ctx.passwords.set(tok, pw)
     return web.json_response({"ok": True})
 
 
@@ -534,25 +538,26 @@ async def admin_forget(request):
 async def _start_job(request, title, steps_factory):
     """Check the admin password for this session, then start the job."""
     ctx = request.app["ctx"]
-    pw = ctx.passwords.get(_token(request))
+    tok = _token(request)
+    pw = ctx.passwords.get(tok)
     try:
         await _run(admin.check_password, pw)
     except admin.NeedPassword as e:
         if e.wrong:
-            ctx.passwords.forget(_token(request))
+            ctx.passwords.failed(tok)
         return web.json_response({"need_password": True, "wrong": e.wrong}, status=428)
     except admin.AdminError as e:
         return _json_error(400, str(e))
     try:
         steps = steps_factory(pw)
-        job = ctx.jobs.start(title, steps)
+        job = ctx.jobs.start(title, steps, owner=tok)
     except (admin.AdminError, network.NetError) as e:
         return _json_error(409, str(e))
     return web.json_response({"job": job.id})
 
 
 async def job_view(request):
-    job = request.app["ctx"].jobs.get(request.match_info["job_id"])
+    job = request.app["ctx"].jobs.get(request.match_info["job_id"], _token(request))
     if not job:
         raise web.HTTPNotFound()
     return web.json_response(job.view())
@@ -590,48 +595,61 @@ async def store_install(request):
 async def deb_upload(request):
     reader = await request.multipart()
     part = await reader.next()
-    while part is not None and (part.name != "file" or not part.filename):
+    while part is not None and (part.name != "file" or not getattr(part, "filename", None)):
         part = await reader.next()
     if part is None or not part.filename.lower().endswith(".deb"):
         return _json_error(400, "Choose a .deb file")
-    dest = os.path.join(await _run(packages.cache_dir), "upload-%d.deb" % int(time.time() * 1000))
-    size = 0
-    with open(dest, "wb") as fh:
-        while True:
-            chunk = await part.read_chunk(256 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > packages.MAX_DEB:
-                fh.close()
-                os.remove(dest)
-                return _json_error(400, "Package is too large")
-            await _run(fh.write, chunk)
     try:
-        info = await _run(packages.deb_info, dest)
+        dest = await _run(packages.new_upload_path)
     except admin.AdminError as e:
-        os.remove(dest)
-        return _json_error(400, str(e))
-    resp = await _start_job(request, "Install %s" % info["Package"],
-                            lambda pw: packages.install_steps(dest, pw))
-    if resp.status != 200 and resp.status != 428:
-        os.remove(dest)
-    if resp.status == 428:
-        # keep the upload so the browser can retry after the password
-        resp = web.json_response({"need_password": True, "upload": os.path.basename(dest)}, status=428)
-    return resp
+        return _json_error(507, str(e))
+    keep = False
+    try:
+        size = 0
+        with open(dest, "wb") as fh:
+            while True:
+                chunk = await part.read_chunk(256 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > packages.MAX_DEB:
+                    return _json_error(400, "Package is too large")
+                await _run(fh.write, chunk)
+        try:
+            info = await _run(packages.deb_info, dest)
+        except admin.AdminError as e:
+            return _json_error(400, str(e))
+        resp = await _start_job(request, "Install %s" % info["Package"],
+                                lambda pw: packages.install_steps(dest, pw))
+        if resp.status == 200:
+            keep = True             # the install job deletes it when done
+        elif resp.status == 428:
+            keep = True             # kept briefly so the browser can retry after the password
+            body = json.loads(resp.body)
+            body["upload"] = os.path.basename(dest)
+            resp = web.json_response(body, status=428)
+        return resp
+    finally:
+        if not keep:
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
 
 
 async def deb_install_cached(request):
     """Retry installing a just-uploaded package after the password was given."""
     b = await _body(request)
     name = b.get("upload")
-    if not isinstance(name, str) or not re.fullmatch(r"upload-\d+\.deb", name):
+    if not isinstance(name, str) or not packages.UPLOAD_RE.fullmatch(name):
         return _json_error(400, "Bad request")
     path = os.path.join(await _run(packages.cache_dir), name)
     if not os.path.isfile(path):
         return _json_error(404, "Upload expired, please upload again")
-    info = await _run(packages.deb_info, path)
+    try:
+        info = await _run(packages.deb_info, path)
+    except admin.AdminError as e:
+        return _json_error(400, str(e))
     return await _start_job(request, "Install %s" % info["Package"],
                             lambda pw: packages.install_steps(path, pw))
 
@@ -693,7 +711,7 @@ async def net_join(request):
     if not isinstance(ssid, str) or not isinstance(psk, str):
         return _json_error(400, "Bad request")
     try:
-        network.join_steps(ssid, psk, None)        # validate before asking for anything
+        network.validate_join(ssid, psk)            # validate before asking for anything
     except network.NetError as e:
         return _json_error(400, str(e))
     return await _start_job(request, "Join %s" % ssid, lambda pw: network.join_steps(ssid, psk, pw))

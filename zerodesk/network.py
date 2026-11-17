@@ -2,6 +2,7 @@
 connections works as the normal user; adding a new Wi-Fi network needs the
 admin password."""
 
+import os
 import re
 import subprocess
 
@@ -92,27 +93,86 @@ def down(uuid):
     _run("connection", "down", "uuid", uuid)
 
 
-def join_steps(ssid, psk, password):
-    """Join a new Wi-Fi network. Uses the admin password because adding a
-    network is a system-wide change."""
-    if not ssid or len(ssid.encode()) > 32 or "\x00" in ssid:
+SYSTEM_CONNECTIONS = "/etc/NetworkManager/system-connections"
+INSTALL = "/usr/bin/install"
+
+
+def _key_value(text):
+    """Escape a value for a NetworkManager keyfile (GKeyFile syntax)."""
+    text = text.replace("\\", "\\\\")
+    if text.startswith(" "):
+        text = "\\s" + text[1:]
+    return text
+
+
+def keyfile(ssid, psk, uuid, sae=False):
+    """A NetworkManager connection file. The SSID is written as a byte list so
+    any name works without escaping; the PSK is validated printable ASCII."""
+    name = "".join(c if c.isprintable() else "?" for c in ssid)
+    lines = ["[connection]", "id=%s" % _key_value(name), "uuid=%s" % uuid, "type=wifi", "",
+             "[wifi]", "mode=infrastructure", "ssid=%s;" % ";".join(str(b) for b in ssid.encode()), ""]
+    if psk:
+        lines += ["[wifi-security]", "key-mgmt=%s" % ("sae" if sae else "wpa-psk"),
+                  "psk=%s" % _key_value(psk), ""]
+    lines += ["[ipv4]", "method=auto", "", "[ipv6]", "method=auto", ""]
+    return "\n".join(lines)
+
+
+def validate_join(ssid, psk):
+    if not isinstance(ssid, str) or not ssid or len(ssid.encode()) > 32 or "\x00" in ssid:
         raise NetError("Invalid network name")
-    if psk and not (8 <= len(psk) <= 63 or re.fullmatch(r"[0-9a-fA-F]{64}", psk)):
+    if psk and not (re.fullmatch(r"[\x20-\x7e]{8,63}", psk) or re.fullmatch(r"[0-9a-fA-F]{64}", psk)):
         raise NetError("Wi-Fi passwords are 8 to 63 characters")
 
+
+def _security_of(ssid):
+    try:
+        for n in scan():
+            if n["ssid"] == ssid:
+                return n["security"]
+    except NetError:
+        pass
+    return ""
+
+
+def join_steps(ssid, psk, password):
+    """Join a new Wi-Fi network (a system-wide change, so it needs the admin
+    password). The Wi-Fi password goes into a root-only connection file and is
+    never put on a command line."""
+    validate_join(ssid, psk)
+
     def steps(job):
+        import tempfile
+        import uuid as uuidlib
         job.add("Joining %s...\n" % ssid)
-        argv = [NMCLI, "--wait", "40", "device", "wifi", "connect", ssid]
-        if psk:
-            argv += ["password", psk]
-        proc = admin.sudo_popen(argv, password)
-        out = proc.communicate(timeout=60)[0].decode("utf-8", "replace")
-        job.add(out.replace(psk, "********") if psk else out)
-        if proc.returncode != 0:
+        sec = _security_of(ssid).upper()
+        sae = "WPA3" in sec and "WPA2" not in sec and "WPA1" not in sec
+        uid = str(uuidlib.uuid4())
+        target = os.path.join(SYSTEM_CONNECTIONS, "zerodesk-%s.nmconnection" % uid)
+        fd, tmp = tempfile.mkstemp(prefix=".zerodesk-wifi-", dir=packages_cache())
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(keyfile(ssid, psk, uid, sae))
+            if admin.sudo_run(job, [INSTALL, "-m", "600", "-o", "root", "-g", "root", tmp, target],
+                              password, timeout=30) != 0:
+                raise admin.AdminError("Couldn't save the network")
+        finally:
+            os.unlink(tmp)
+        ok = (admin.sudo_run(job, [NMCLI, "connection", "load", target], password, timeout=30) == 0 and
+              admin.sudo_run(job, [NMCLI, "--wait", "40", "connection", "up", "uuid", uid],
+                             password, timeout=60) == 0)
+        if not ok:
+            admin.sudo_run(job, [NMCLI, "connection", "delete", "uuid", uid], password, timeout=30)
+            job.add("\nCouldn't connect. Check the password and try again.\n")
             job.state = "failed"
         else:
             job.add("Connected. If this browser loses contact, use the new address on the Cardputer.\n")
     return steps
+
+
+def packages_cache():
+    from .packages import cache_dir
+    return cache_dir()
 
 
 def forget_steps(uuid, password):
@@ -120,7 +180,10 @@ def forget_steps(uuid, password):
         raise NetError("Invalid connection")
 
     def steps(job):
-        kind = _run("-g", "connection.type", "connection", "show", "uuid", uuid).strip()
+        try:
+            kind = _run("-g", "connection.type", "connection", "show", "uuid", uuid).strip()
+        except NetError as e:
+            raise admin.AdminError(str(e))
         if kind != "802-11-wireless":
             raise admin.AdminError("Only Wi-Fi networks can be forgotten here")
         proc = admin.sudo_popen([NMCLI, "connection", "delete", "uuid", uuid], password)

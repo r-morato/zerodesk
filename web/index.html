@@ -146,8 +146,8 @@
 
 <dialog id="pw-dlg"><form id="pw-form" method="dialog">
   <h2 class="dlg-title">Admin password</h2>
-  <p id="pw-msg" class="muted small">This needs your Cardputer password (the one <code>sudo</code> asks for). It's kept in memory for 5 minutes and never saved.</p>
-  <input id="pw-input" type="password" autocomplete="current-password" aria-label="Password">
+  <p id="pw-msg" class="muted small">This needs your Cardputer password (the one <code>sudo</code> asks for). It's kept in memory for 5 minutes and never saved. First time? Check the certificate fingerprint matches the one on the Cardputer (key 8).</p>
+  <input id="pw-input" type="password" autocomplete="off" aria-label="Password">
   <p id="pw-err" class="error small"></p>
   <menu><button type="button" class="ghost dlg-cancel">Cancel</button><button id="pw-ok" value="ok" class="primary">Continue</button></menu>
 </form></dialog>
