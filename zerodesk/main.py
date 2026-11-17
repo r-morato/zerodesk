@@ -35,7 +35,10 @@ async def _serve(ctx, port, cert, key, stop_event):
     from aiohttp import web
     from .server import make_app
     from .tls import server_context
-    runner = web.AppRunner(make_app(ctx), access_log=None)
+    try:
+        runner = web.AppRunner(make_app(ctx), access_log=None, shutdown_timeout=2.0)
+    except TypeError:                    # older aiohttp
+        runner = web.AppRunner(make_app(ctx), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port, ssl_context=server_context(cert, key))
     await site.start()
@@ -98,7 +101,11 @@ def run_device():
         display.close()
         if fb:
             fb.close()
-    return 0
+    # Background work still running (a Wi-Fi scan, a store download) would keep
+    # the process alive until it finishes; everything that matters is closed.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 def run_dev(port):

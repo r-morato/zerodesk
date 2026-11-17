@@ -49,6 +49,7 @@ class Context:
             shell_factory = Shell
         self.shell_factory = shell_factory
         self.shells = 0
+        self.sockets = set()          # open websockets, closed when ZeroDesk stops
         self._stats_cache = (0.0, None)
         self.viewers = 0
         self.passwords = admin.Passwords()
@@ -347,6 +348,7 @@ async def ws_shell(request):
     ctx = request.app["ctx"]
     ws = web.WebSocketResponse(heartbeat=30, max_msg_size=1024 * 1024)
     await ws.prepare(request)
+    ctx.sockets.add(ws)
     if ctx.shells >= MAX_SHELLS:
         await ws.close(code=4429, message=b"too many shells")
         return ws
@@ -440,6 +442,7 @@ async def ws_shell(request):
         watch_task.cancel()
         await _run(sh.close)
         ctx.shells -= 1
+        ctx.sockets.discard(ws)
     return ws
 
 
@@ -447,7 +450,9 @@ async def ws_screen(request):
     ctx = request.app["ctx"]
     ws = web.WebSocketResponse(heartbeat=30, max_msg_size=64 * 1024)
     await ws.prepare(request)
+    ctx.sockets.add(ws)
     if not ctx.fb:
+        ctx.sockets.discard(ws)
         await ws.send_str(json.dumps({"type": "error", "message": "Screen not available"}))
         await ws.close()
         return ws
@@ -491,6 +496,7 @@ async def ws_screen(request):
             kb.release_all()
         ctx.viewers -= 1
         ctx.guard.changed.set()
+        ctx.sockets.discard(ws)
     return ws
 
 
@@ -728,9 +734,18 @@ async def net_forget(request):
 
 
 # ------------------------------------------------------------------ app
+async def close_sockets(app):
+    """On quit: tell every browser we're going, instead of waiting for them."""
+    socks = list(app["ctx"].sockets)
+    if socks:
+        await asyncio.wait([asyncio.ensure_future(ws.close(code=1001, message=b"ZeroDesk stopped"))
+                            for ws in socks], timeout=2)
+
+
 def make_app(ctx):
     app = web.Application(middlewares=[security_mw], client_max_size=2 * 1024 * 1024)
     app["ctx"] = ctx
+    app.on_shutdown.append(close_sockets)
     r = app.router
     r.add_get("/", page_index)
     r.add_get("/login", page_login)

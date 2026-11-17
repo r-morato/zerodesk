@@ -80,6 +80,13 @@ class DeviceScreen:
         d.text((10, 150), "8 or Esc: back", font=self.f_small, fill=DIM)
         return img
 
+    def render_stopping(self):
+        img = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        d = ImageDraw.Draw(img)
+        d.text((WIDTH // 2, HEIGHT // 2 - 10), "Stopping ZeroDesk…", font=self.f_title, fill=TEXT, anchor="mm")
+        d.text((WIDTH // 2, HEIGHT // 2 + 12), "Signing out browsers", font=self.f_body, fill=DIM, anchor="mm")
+        return img
+
     def render(self):
         if self.show_fp:
             return self.render_fingerprint()
@@ -196,6 +203,10 @@ class DeviceScreen:
                 if not self.runner.running():
                     self.display.show(self.render())
                 last_draw = time.monotonic()
+        try:
+            self.display.show(self.render_stopping())
+        except Exception:
+            pass
         on_quit()
 
 
