@@ -55,19 +55,16 @@
   <section id="tab-screen" class="tab">
     <div class="screen-layout">
       <div class="screen-col">
-        <div class="device">
+        <div class="device" id="device">
+          <div class="device-top">
+            <span id="dev-led" class="led" title="Not connected"></span>
+            <span class="dev-name">ZeroDesk</span>
+          </div>
           <div class="lcd">
             <canvas id="screen" width="320" height="170" tabindex="0" aria-label="Cardputer screen"></canvas>
-            <div id="screen-overlay" class="overlay">Click the screen to type</div>
+            <div id="screen-overlay" class="overlay">Click the screen to type with your keyboard</div>
           </div>
-          <div class="keys" id="soft-keys">
-            <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button>
-            <button data-key="ArrowUp" aria-label="Up">↑</button><button data-key="ArrowDown" aria-label="Down">↓</button>
-            <button data-key="ArrowLeft" aria-label="Left">←</button><button data-key="ArrowRight" aria-label="Right">→</button>
-            <button data-key="Enter">Enter</button>
-            <span class="sep"></span>
-            <button data-key="Digit4" class="fn">4</button><button data-key="Digit5" class="fn">5</button><button data-key="Digit6" class="fn">6</button><button data-key="Digit7" class="fn">7</button><button data-key="Digit8" class="fn">8</button>
-          </div>
+          <div class="kb" id="kb" role="group" aria-label="Cardputer keyboard"></div>
         </div>
         <div class="under-device">
           <div class="screen-tools">
@@ -75,7 +72,7 @@
             <button id="rec" class="small">Record</button>
             <span id="rec-time" class="muted small"></span>
             <span class="spacer"></span>
-            <span class="muted small hint">Click the screen to type. Click anywhere else to stop.</span>
+            <span class="muted small hint">Gold labels need Fn first. Fn, Shift, Ctrl and Alt apply to the next key.</span>
           </div>
           <form id="paste-form" class="paste">
             <textarea id="paste-text" rows="2" maxlength="4000" placeholder="Text to type on the Cardputer"></textarea>

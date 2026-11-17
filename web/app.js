@@ -256,7 +256,7 @@
       if (!wanted || ws) return;
       ws = new WebSocket(wsUrl("/ws/screen"));
       ws.binaryType = "blob";
-      ws.onopen = () => { retry = 0; };
+      ws.onopen = () => { retry = 0; setLed(true); };
       ws.onmessage = async (ev) => {
         if (typeof ev.data === "string") {
           try { const m = JSON.parse(ev.data); if (m.type === "error") toast(m.message, true); } catch (e) { /* */ }
@@ -270,12 +270,13 @@
         } catch (e) { /* bad frame */ }
       };
       ws.onclose = (ev) => {
-        ws = null;
+        ws = null; setLed(false);
         if (ev.code === 4401 || ev.code === 1008) { location.replace("/login"); return; }
         if (wanted) setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
       };
     }
     function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+    function setLed(on) { const l = $("dev-led"); l.classList.toggle("on", on); l.title = on ? "Live" : "Not connected"; }
     function key(code, isDown) {
       if (isDown) down.add(code); else down.delete(code);
       send({ type: "key", code, down: isDown });
@@ -292,11 +293,74 @@
       else { key(e.code, false); key(e.code, true); }
     });
     canvas.addEventListener("keyup", (e) => { if (e.metaKey) return; e.preventDefault(); key(e.code, false); });
-    $("soft-keys").addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-key]");
+    // ---- the on-screen keyboard: 14 columns, 4 rows
+    // [code, label, shifted label, fn code, fn label, width]
+    const L = (code, label, shifted, fn, fnLabel, w) => ({ code, label, shifted: shifted || label.toUpperCase(), fn, fnLabel, w: w || 1 });
+    const letters = (str) => str.split("").map(c => L("Key" + c.toUpperCase(), c));
+    const ROWS = [
+      [L("Backquote", "`", "~", "Escape", "esc"), ...Array.from("1234567890").map((d, i) => L("Digit" + d, d, "!@#$%^&*()"[i])),
+       L("Minus", "-", "_"), L("Equal", "=", "+"), L("Backspace", "del", "del", "Delete", "⌦")],
+      [L("Tab", "tab", "tab"), ...letters("qwertyuiop"), L("BracketLeft", "[", "{"), L("BracketRight", "]", "}"), L("Backslash", "\\", "|")],
+      [L("mod:fn", "fn", "fn"), L("mod:ShiftLeft", "shift", "shift"), ...letters("asdfghjkl"),
+       L("Semicolon", ";", ":", "ArrowUp", "↑"), L("Quote", "'", '"'), L("Enter", "enter", "enter")],
+      [L("mod:ControlLeft", "ctrl", "ctrl"), L("mod:AltLeft", "alt", "alt"), ...letters("zxcvbnm"),
+       L("Comma", ",", "<", "ArrowLeft", "←"), L("Period", ".", ">", "ArrowDown", "↓"), L("Slash", "/", "?", "ArrowRight", "→"),
+       L("Space", "space", "space", null, null, 2)],
+    ];
+    const kb = $("kb"), mods = new Set(), keyEls = {};
+    ROWS.forEach(row => row.forEach(k => {
+      const b = el("button", "key" + (k.code.startsWith("mod:") ? " mod" : "") + (k.label.length > 1 ? " word" : ""));
+      b.type = "button"; b.tabIndex = -1;
+      if (k.w > 1) b.style.gridColumn = "span " + k.w;
+      if (k.fnLabel) b.append(el("span", "fn-label", k.fnLabel));
+      const main = el("span", "main", k.label); b.append(main);
+      b.dataset.code = k.code; b._k = k; b._main = main;
+      b.setAttribute("aria-label", k.code.replace(/^mod:|Key|Digit/g, ""));
+      keyEls[k.code] = b; kb.append(b);
+    }));
+    function refreshMods() {
+      kb.classList.toggle("shifted", mods.has("ShiftLeft"));
+      kb.classList.toggle("fn-on", mods.has("fn"));
+      kb.querySelectorAll(".key").forEach(b => {
+        const k = b._k;
+        if (k.code.startsWith("mod:")) b.classList.toggle("on", mods.has(k.code.slice(4)));
+        else b._main.textContent = mods.has("ShiftLeft") ? k.shifted : k.label;
+      });
+    }
+    let held = null;      // { code, mods } for the key being pressed with the mouse or finger
+    kb.addEventListener("pointerdown", (e) => {
+      const b = e.target.closest(".key");
       if (!b) return;
-      key(b.dataset.key, true); setTimeout(() => key(b.dataset.key, false), 60);
+      e.preventDefault();
+      const k = b._k;
+      if (k.code.startsWith("mod:")) {                  // sticky: applies to the next key
+        const m = k.code.slice(4);
+        mods.has(m) ? mods.delete(m) : mods.add(m); refreshMods(); return;
+      }
+      const code = mods.has("fn") && k.fn ? k.fn : k.code;
+      const used = [...mods].filter(m => m !== "fn");
+      used.forEach(m => key(m, true));
+      key(code, true);
+      held = { code, used, b }; b.classList.add("down");
+      try { b.setPointerCapture(e.pointerId); } catch (err) { /* */ }
     });
+    function letGo() {
+      if (!held) return;
+      key(held.code, false); held.used.forEach(m => key(m, false));
+      held.b.classList.remove("down"); held = null;
+      mods.clear(); refreshMods();
+    }
+    kb.addEventListener("pointerup", letGo);
+    kb.addEventListener("pointercancel", letGo);
+    kb.addEventListener("lostpointercapture", letGo);
+    // light up the on-screen key when typing on a real keyboard
+    const lit = (code, on) => {
+      const b = keyEls[code] || keyEls["mod:" + code] || keyEls[{ ShiftRight: "mod:ShiftLeft", ControlRight: "mod:ControlLeft", AltRight: "mod:AltLeft", Escape: "Backquote", Delete: "Backspace", ArrowUp: "Semicolon", ArrowDown: "Period", ArrowLeft: "Comma", ArrowRight: "Slash" }[code]];
+      if (b) b.classList.toggle("down", on);
+    };
+    canvas.addEventListener("keydown", (e) => lit(e.code, true));
+    canvas.addEventListener("keyup", (e) => lit(e.code, false));
+    canvas.addEventListener("blur", () => kb.querySelectorAll(".key.down").forEach(b => b.classList.remove("down")));
 
     // screenshot + recording happen in the browser, from frames it already has
     function bigCanvas() {
