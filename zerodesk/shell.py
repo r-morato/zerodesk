@@ -124,8 +124,15 @@ class Shell:
 
 
 def _alive(pid):
+    """True if pid is still running. A zombie (exited, not yet reaped by its
+    parent) counts as dead: it can't run anything any more."""
     try:
         os.kill(pid, 0)
-        return True
     except (ProcessLookupError, PermissionError):
+        return False
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            stat = fh.read()
+        return stat[stat.rindex(")") + 2:][:1] != "Z"
+    except (OSError, ValueError):
         return False

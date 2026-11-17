@@ -293,41 +293,69 @@
       else { key(e.code, false); key(e.code, true); }
     });
     canvas.addEventListener("keyup", (e) => { if (e.metaKey) return; e.preventDefault(); key(e.code, false); });
-    // ---- the on-screen keyboard: 14 columns, 4 rows
-    // [code, label, shifted label, fn code, fn label, width]
-    const L = (code, label, shifted, fn, fnLabel, w) => ({ code, label, shifted: shifted || label.toUpperCase(), fn, fnLabel, w: w || 1 });
-    const letters = (str) => str.split("").map(c => L("Key" + c.toUpperCase(), c));
+    // ---- the on-screen keyboard, laid out like the Cardputer's: 4 rows of 11,
+    // with Esc and Tab above. Gold labels are the fn layer, green ones sym.
+    // K(code, label, shifted, sym character, fn code, fn label, css class)
+    const K = (code, label, o) => Object.assign({ code, label, shifted: label.length === 1 ? label.toUpperCase() : label }, o || {});
+    const SHIFTED_DIGITS = "!@#$%^&*()";
     const ROWS = [
-      [L("Backquote", "`", "~", "Escape", "esc"), ...Array.from("1234567890").map((d, i) => L("Digit" + d, d, "!@#$%^&*()"[i])),
-       L("Minus", "-", "_"), L("Equal", "=", "+"), L("Backspace", "del", "del", "Delete", "⌦")],
-      [L("Tab", "tab", "tab"), ...letters("qwertyuiop"), L("BracketLeft", "[", "{"), L("BracketRight", "]", "}"), L("Backslash", "\\", "|")],
-      [L("mod:fn", "fn", "fn"), L("mod:ShiftLeft", "shift", "shift"), ...letters("asdfghjkl"),
-       L("Semicolon", ";", ":", "ArrowUp", "↑"), L("Quote", "'", '"'), L("Enter", "enter", "enter")],
-      [L("mod:ControlLeft", "ctrl", "ctrl"), L("mod:AltLeft", "alt", "alt"), ...letters("zxcvbnm"),
-       L("Comma", ",", "<", "ArrowLeft", "←"), L("Period", ".", ">", "ArrowDown", "↓"), L("Slash", "/", "?", "ArrowRight", "→"),
-       L("Space", "space", "space", null, null, 2)],
+      [K("Escape", "esc", { cls: "top" }), K("gap", "", { span: 9 }), K("Tab", "tab", { cls: "top" })],
+      [...Array.from("1234567890").map((d, i) => K("Digit" + d, d, { shifted: SHIFTED_DIGITS[i], fn: "F" + (i + 1), fnLabel: "F" + (i + 1) })),
+       K("Backspace", "del")],
+      [K("mod:sym", "sym"), ...["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"].map(c => K("Key" + c.toUpperCase(), c))],
+      [K("mod:ShiftLeft", "shift"), ...["a", "s", "d", "f", "g", "h", "j", "k", "l"].map(c => K("Key" + c.toUpperCase(), c)), K("Enter", "ok")],
+      [K("mod:fn", "fn"), K("mod:ControlLeft", "ctrl"), K("mod:AltLeft", "alt"),
+       ...["z", "x", "c", "v", "b", "n", "m"].map(c => K("Key" + c.toUpperCase(), c)), K("Space", "space")],
     ];
+    const at = {}; ROWS.flat().forEach(k => { at[k.code] = k; });
+    // fn layer: arrows as an inverted T on F / Z X C, F11 F12, and the navigation keys
+    Object.assign(at.KeyF, { fn: "ArrowUp", fnLabel: "↑" });
+    Object.assign(at.KeyZ, { fn: "ArrowLeft", fnLabel: "←" });
+    Object.assign(at.KeyX, { fn: "ArrowDown", fnLabel: "↓" });
+    Object.assign(at.KeyC, { fn: "ArrowRight", fnLabel: "→" });
+    Object.assign(at.KeyO, { fn: "F11", fnLabel: "F11" });
+    Object.assign(at.KeyP, { fn: "F12", fnLabel: "F12" });
+    Object.assign(at.KeyJ, { fn: "PrintScreen", fnLabel: "prsc" });
+    Object.assign(at.KeyK, { fn: "Home", fnLabel: "home" });
+    Object.assign(at.KeyL, { fn: "PageUp", fnLabel: "pgup" });
+    Object.assign(at.KeyB, { fn: "Insert", fnLabel: "ins" });
+    Object.assign(at.KeyN, { fn: "End", fnLabel: "end" });
+    Object.assign(at.KeyM, { fn: "PageDown", fnLabel: "pgdn" });
+    Object.assign(at.Backspace, { fn: "Delete", fnLabel: "⌦" });
+    // sym layer: the symbols that aren't on the number row
+    const SYM = { KeyQ: "~", KeyW: "`", KeyE: "_", KeyR: "-", KeyT: "+", KeyY: "=", KeyU: "[", KeyI: "]",
+                  KeyA: ";", KeyS: ":", KeyD: "'", KeyG: '"', KeyH: "<", KeyJ: ">", KeyK: "\\", KeyL: "|",
+                  KeyV: ",", KeyB: ".", KeyN: "/", KeyM: "?" };
+    Object.entries(SYM).forEach(([c, ch]) => { at[c].sym = ch; });
+    // a character -> the key (and whether Shift is needed) on a US layout
+    const PLAIN = { "-": "Minus", "=": "Equal", "[": "BracketLeft", "]": "BracketRight", ";": "Semicolon", "'": "Quote",
+                    "`": "Backquote", "\\": "Backslash", ",": "Comma", ".": "Period", "/": "Slash" };
+    const SHIFTED = { "_": "Minus", "+": "Equal", "{": "BracketLeft", "}": "BracketRight", ":": "Semicolon", '"': "Quote",
+                      "~": "Backquote", "|": "Backslash", "<": "Comma", ">": "Period", "?": "Slash" };
+    const charKey = (ch) => PLAIN[ch] ? [PLAIN[ch], false] : [SHIFTED[ch], true];
+
     const kb = $("kb"), mods = new Set(), keyEls = {};
     ROWS.forEach(row => row.forEach(k => {
-      const b = el("button", "key" + (k.code.startsWith("mod:") ? " mod" : "") + (k.label.length > 1 ? " word" : ""));
+      if (k.code === "gap") { const g = el("span", "key-gap"); g.style.gridColumn = "span " + k.span; kb.append(g); return; }
+      const b = el("button", "key" + (k.code.startsWith("mod:") ? " mod" : "") + (k.label.length > 1 ? " word" : "") + (k.cls ? " " + k.cls : ""));
       b.type = "button"; b.tabIndex = -1;
-      if (k.w > 1) b.style.gridColumn = "span " + k.w;
-      if (k.fnLabel) b.append(el("span", "fn-label", k.fnLabel));
+      if (k.fnLabel) b.append(el("span", "fn-label" + (/^[↑↓←→]$/.test(k.fnLabel) ? " arrow" : ""), k.fnLabel));
+      if (k.sym) b.append(el("span", "sym-label", k.sym));
       const main = el("span", "main", k.label); b.append(main);
       b.dataset.code = k.code; b._k = k; b._main = main;
       b.setAttribute("aria-label", k.code.replace(/^mod:|Key|Digit/g, ""));
       keyEls[k.code] = b; kb.append(b);
     }));
     function refreshMods() {
-      kb.classList.toggle("shifted", mods.has("ShiftLeft"));
       kb.classList.toggle("fn-on", mods.has("fn"));
+      kb.classList.toggle("sym-on", mods.has("sym"));
       kb.querySelectorAll(".key").forEach(b => {
         const k = b._k;
         if (k.code.startsWith("mod:")) b.classList.toggle("on", mods.has(k.code.slice(4)));
         else b._main.textContent = mods.has("ShiftLeft") ? k.shifted : k.label;
       });
     }
-    let held = null;      // { code, mods } for the key being pressed with the mouse or finger
+    let held = null;      // the key being pressed with the mouse or a finger
     kb.addEventListener("pointerdown", (e) => {
       const b = e.target.closest(".key");
       if (!b) return;
@@ -335,10 +363,16 @@
       const k = b._k;
       if (k.code.startsWith("mod:")) {                  // sticky: applies to the next key
         const m = k.code.slice(4);
-        mods.has(m) ? mods.delete(m) : mods.add(m); refreshMods(); return;
+        if (mods.has(m)) mods.delete(m);
+        else { if (m === "fn") mods.delete("sym"); if (m === "sym") mods.delete("fn"); mods.add(m); }
+        refreshMods(); return;
       }
-      const code = mods.has("fn") && k.fn ? k.fn : k.code;
-      const used = [...mods].filter(m => m !== "fn");
+      let code = k.code, used = [...mods].filter(m => m !== "fn" && m !== "sym");
+      if (mods.has("fn") && k.fn) code = k.fn;
+      else if (mods.has("sym") && k.sym) {
+        const [c, shift] = charKey(k.sym);
+        code = c; used = used.filter(m => m !== "ShiftLeft"); if (shift) used.push("ShiftLeft");
+      }
       used.forEach(m => key(m, true));
       key(code, true);
       held = { code, used, b }; b.classList.add("down");
@@ -354,10 +388,11 @@
     kb.addEventListener("pointercancel", letGo);
     kb.addEventListener("lostpointercapture", letGo);
     // light up the on-screen key when typing on a real keyboard
-    const lit = (code, on) => {
-      const b = keyEls[code] || keyEls["mod:" + code] || keyEls[{ ShiftRight: "mod:ShiftLeft", ControlRight: "mod:ControlLeft", AltRight: "mod:AltLeft", Escape: "Backquote", Delete: "Backspace", ArrowUp: "Semicolon", ArrowDown: "Period", ArrowLeft: "Comma", ArrowRight: "Slash" }[code]];
-      if (b) b.classList.toggle("down", on);
-    };
+    const physical = { ShiftRight: "mod:ShiftLeft", ControlRight: "mod:ControlLeft", AltRight: "mod:AltLeft",
+                       ShiftLeft: "mod:ShiftLeft", ControlLeft: "mod:ControlLeft", AltLeft: "mod:AltLeft", NumpadEnter: "Enter" };
+    ROWS.flat().forEach(k => { if (k.fn && !keyEls[k.fn]) physical[k.fn] = k.code; });
+    Object.entries(SYM).forEach(([c, ch]) => { const [code] = charKey(ch); if (!keyEls[code] && !physical[code]) physical[code] = c; });
+    const lit = (code, on) => { const b = keyEls[code] || keyEls[physical[code]]; if (b) b.classList.toggle("down", on); };
     canvas.addEventListener("keydown", (e) => lit(e.code, true));
     canvas.addEventListener("keyup", (e) => lit(e.code, false));
     canvas.addEventListener("blur", () => kb.querySelectorAll(".key.down").forEach(b => b.classList.remove("down")));

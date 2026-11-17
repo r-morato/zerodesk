@@ -216,7 +216,7 @@ class TestKeyFilter(unittest.TestCase):
             EV_KEY = 1
         kb = RemoteKeyboard.__new__(RemoteKeyboard)
         kb.e = E()
-        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A"]
+        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A", "KEY_SYSRQ"]
         kb.codes = {n: i + 10 for i, n in enumerate(names)}
         sent = []
 
@@ -230,14 +230,16 @@ class TestKeyFilter(unittest.TestCase):
         import zerodesk.screen as scr
         old = scr.BROWSER_KEYS
         scr.BROWSER_KEYS = {"C": "KEY_LEFTCTRL", "A": "KEY_LEFTALT", "Del": "KEY_DELETE",
-                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A"}
+                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A", "PrintScreen": "KEY_SYSRQ"}
         try:
             kb.key("C", True); kb.key("A", True)
             self.assertFalse(kb.key("Del", True))       # Ctrl+Alt+Del
             self.assertFalse(kb.key("F2", True))        # console switch
             self.assertFalse(kb.key("L", True))
+            self.assertFalse(kb.key("PrintScreen", True))   # Alt+SysRq: the kernel's magic key
             self.assertTrue(kb.key("X", True))          # ordinary keys still work
             kb.key("A", False)
+            self.assertTrue(kb.key("PrintScreen", True))    # plain Print Screen (fn+J) works
             self.assertTrue(kb.key("Del", True))        # Ctrl+Del alone is fine
         finally:
             scr.BROWSER_KEYS = old
