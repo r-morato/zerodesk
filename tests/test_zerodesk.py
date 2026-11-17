@@ -216,7 +216,7 @@ class TestKeyFilter(unittest.TestCase):
             EV_KEY = 1
         kb = RemoteKeyboard.__new__(RemoteKeyboard)
         kb.e = E()
-        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A", "KEY_SYSRQ"]
+        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A"]
         kb.codes = {n: i + 10 for i, n in enumerate(names)}
         sent = []
 
@@ -230,16 +230,14 @@ class TestKeyFilter(unittest.TestCase):
         import zerodesk.screen as scr
         old = scr.BROWSER_KEYS
         scr.BROWSER_KEYS = {"C": "KEY_LEFTCTRL", "A": "KEY_LEFTALT", "Del": "KEY_DELETE",
-                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A", "PrintScreen": "KEY_SYSRQ"}
+                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A"}
         try:
             kb.key("C", True); kb.key("A", True)
             self.assertFalse(kb.key("Del", True))       # Ctrl+Alt+Del
             self.assertFalse(kb.key("F2", True))        # console switch
             self.assertFalse(kb.key("L", True))
-            self.assertFalse(kb.key("PrintScreen", True))   # Alt+SysRq: the kernel's magic key
             self.assertTrue(kb.key("X", True))          # ordinary keys still work
             kb.key("A", False)
-            self.assertTrue(kb.key("PrintScreen", True))    # plain Print Screen (fn+J) works
             self.assertTrue(kb.key("Del", True))        # Ctrl+Del alone is fine
         finally:
             scr.BROWSER_KEYS = old
@@ -385,6 +383,58 @@ class TestServer_(unittest.TestCase):
             self.assertEqual(resp.status, 403)
         self.run_async(go())
 
+    def test_screen_ws_keys_reach_keyboard(self):
+        """Keys sent on the screen websocket reach the virtual keyboard."""
+        from PIL import Image
+
+        class FB:
+            def raw(self):
+                return b"x"
+
+            def image(self, raw=None):
+                return Image.new("RGB", (320, 170))
+
+        class KB:
+            def __init__(self):
+                self.events = []
+
+            def key(self, code, down):
+                self.events.append((code, down))
+                return True
+
+            def tap(self, code, shift=False):
+                self.events.append((code, "tap"))
+
+            def release_all(self):
+                pass
+
+        kb = KB()
+
+        async def go():
+            self.guard = S.Guard()
+            ctx = Context(self.guard, Stats(), Runner("/nonexistent"), shell_factory=FakeShell,
+                          framebuffer=FB(), keyboard=kb)
+            c = TestClient(TestServer(make_app(ctx)))
+            await c.start_server()
+            try:
+                h = {"Host": self.HOST, "Origin": self.ORIGIN}
+                r = await c.post("/api/pair", json={"code": self.guard.code}, headers=h)
+                ck = {"Cookie": "%s=%s" % (S.COOKIE, r.cookies[S.COOKIE].value)}
+                ws = await c.ws_connect("/ws/screen", headers=dict(h, **ck))
+                await ws.receive(timeout=5)                      # first frame
+                for down in (True, False):
+                    await ws.send_str(json.dumps({"type": "key", "code": "KeyA", "down": down}))
+                await ws.send_str(json.dumps({"type": "text", "text": "hi"}))
+                for _ in range(50):
+                    if len(kb.events) >= 4:
+                        break
+                    await asyncio.sleep(0.05)
+                await ws.close()
+            finally:
+                await c.close()
+        self.run_async(go())
+        self.assertEqual(kb.events, [("KeyA", True), ("KeyA", False), ("KeyH", "tap"), ("KeyI", "tap")])
+
     def test_upload_and_shell_ws(self):
         async def go():
             c = await self._client()
@@ -513,6 +563,11 @@ class TestFeatures(unittest.TestCase):
         self.assertIn("REST []", out)            # stdin closed after the password
         for bad in ("a\x00b", "a\nb", "", "x" * 300, None):
             self.assertFalse(admin.valid_password(bad))
+
+    def test_virtual_keyboard_is_ordinary(self):
+        """No SysRq on the virtual keyboard (see RemoteKeyboard)."""
+        from zerodesk.screen import BROWSER_KEYS
+        self.assertNotIn("KEY_SYSRQ", BROWSER_KEYS.values())
 
     def test_password_backoff(self):
         from zerodesk import admin

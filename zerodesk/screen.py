@@ -77,7 +77,7 @@ BROWSER_KEYS = {
     "Backspace": "KEY_BACKSPACE", "Delete": "KEY_DELETE", "Space": "KEY_SPACE",
     "ArrowUp": "KEY_UP", "ArrowDown": "KEY_DOWN", "ArrowLeft": "KEY_LEFT", "ArrowRight": "KEY_RIGHT",
     "Home": "KEY_HOME", "End": "KEY_END", "PageUp": "KEY_PAGEUP", "PageDown": "KEY_PAGEDOWN",
-    "Insert": "KEY_INSERT", "PrintScreen": "KEY_SYSRQ",
+    "Insert": "KEY_INSERT",
     "ShiftLeft": "KEY_LEFTSHIFT", "ShiftRight": "KEY_RIGHTSHIFT",
     "ControlLeft": "KEY_LEFTCTRL", "ControlRight": "KEY_RIGHTCTRL",
     "AltLeft": "KEY_LEFTALT", "AltRight": "KEY_RIGHTALT",
@@ -120,7 +120,11 @@ def text_to_keys(text):
 
 class RemoteKeyboard:
     """A virtual keyboard. Needs write access to /dev/uinput (the package's
-    udev rule gives that to the `input` group)."""
+    udev rule gives that to the `input` group).
+
+    Deliberately an ordinary keyboard: no SysRq key (Print Screen). A device
+    with Alt and SysRq is picked up by the kernel's magic-SysRq handler and
+    can be treated differently by other software, which broke remote typing."""
 
     def __init__(self):
         from evdev import UInput, ecodes
@@ -131,8 +135,7 @@ class RemoteKeyboard:
 
     MODS_CTRL = ("KEY_LEFTCTRL", "KEY_RIGHTCTRL")
     MODS_ALT = ("KEY_LEFTALT", "KEY_RIGHTALT")
-    # Alt+SysRq is the kernel's magic key (reboot and the like), so never with Alt
-    ALT_BLOCKED = {"KEY_LEFT", "KEY_RIGHT", "KEY_SYSRQ"} | {"KEY_F%d" % i for i in range(1, 13)}
+    ALT_BLOCKED = {"KEY_LEFT", "KEY_RIGHT"} | {"KEY_F%d" % i for i in range(1, 13)}
 
     def _held(self, names):
         return any(self.codes.get(n) in self.down for n in names)
@@ -140,7 +143,7 @@ class RemoteKeyboard:
     def blocked(self, name):
         """Combinations that act on the whole system rather than the app:
         Ctrl+Alt+Del (reboot) and Alt/Ctrl+Alt + F-keys or arrows (switch to
-        another console), and Alt+SysRq (the kernel's magic key)."""
+        another console)."""
         if not self._held(self.MODS_ALT):
             return False
         if name == "KEY_DELETE" and self._held(self.MODS_CTRL):

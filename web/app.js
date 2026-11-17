@@ -315,7 +315,7 @@
     Object.assign(at.KeyC, { fn: "ArrowRight", fnLabel: "→" });
     Object.assign(at.KeyO, { fn: "F11", fnLabel: "F11" });
     Object.assign(at.KeyP, { fn: "F12", fnLabel: "F12" });
-    Object.assign(at.KeyJ, { fn: "PrintScreen", fnLabel: "prsc" });
+    Object.assign(at.KeyJ, { fn: "Screenshot", fnLabel: "prsc" });
     Object.assign(at.KeyK, { fn: "Home", fnLabel: "home" });
     Object.assign(at.KeyL, { fn: "PageUp", fnLabel: "pgup" });
     Object.assign(at.KeyB, { fn: "Insert", fnLabel: "ins" });
@@ -393,6 +393,9 @@
         refreshMods(); return;
       }
       let code = k.code, used = [...mods].filter(m => m !== "fn" && m !== "sym");
+      if (mods.has("fn") && k.fn === "Screenshot") {     // fn+J: save a screenshot here
+        mods.clear(); refreshMods(); $("shot").click(); return;
+      }
       if (mods.has("fn") && k.fn) code = k.fn;
       else if (mods.has("sym") && k.sym) {
         const [c, shift] = charKey(k.sym);
