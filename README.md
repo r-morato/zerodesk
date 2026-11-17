@@ -2,7 +2,7 @@
 
 **Control your M5Stack CardputerZero from a browser.**
 
-Open ZeroDesk on the Cardputer, type the address it shows into a browser on the same network, and enter the one-time code. You get the Cardputer's live screen (with typing, pasting, screenshots and recordings), a shell, a file browser, app installs from the store, Wi-Fi and VPN controls, and system stats.
+Open ZeroDesk on the Cardputer, type the address it shows into a browser on the same network, and enter the one-time code. You get the Cardputer's live screen with a working on-screen keyboard (plus pasting, screenshots and recordings), a shell, a file browser, app installs from the store, Wi-Fi and VPN controls, and system stats.
 
 ![ZeroDesk in a browser: the live Cardputer screen and the app store](docs/screens.png)
 
@@ -10,7 +10,7 @@ Open ZeroDesk on the Cardputer, type the address it shows into a browser on the 
 
 1. **Open ZeroDesk.** The Cardputer shows an address like `https://192.168.1.50:8443` and a 6-digit code.
 2. **Pair.** Open the address in a browser on the same network and enter the code. Your browser will warn about the certificate the first time: ZeroDesk makes its own, and the Cardputer shows the end of its fingerprint so you can check it.
-3. **Use it.** Tabs for Overview, Screen, Shell, Files, Apps and Network. Apps you start from the browser run on the Cardputer while ZeroDesk keeps serving.
+3. **Use it.** Tabs for Overview, Screen, Shell, Files, Apps and Network. On the Screen tab, click the keys or click the screen and type on your own keyboard. The on-screen keys follow the Cardputer's layout, including `fn` (arrows on `F` `Z` `X` `C`) and `sym`. Apps you start from the browser run on the Cardputer while ZeroDesk keeps serving.
 
 Installing or removing apps and joining Wi-Fi need admin rights, so the browser asks for your Cardputer password (the one `sudo` uses). It's checked, kept in memory for 5 minutes and never saved.
 
@@ -54,4 +54,4 @@ packaging/build-deb.sh                  # build the .deb
 
 ## License
 
-MIT. Includes [xterm.js](https://github.com/xtermjs/xterm.js) (MIT).
+MIT. Includes [xterm.js](https://github.com/xtermjs/xterm.js) (MIT) and the Chakra Petch and IBM Plex fonts (SIL Open Font License 1.1).
