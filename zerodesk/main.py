@@ -126,6 +126,8 @@ def run_dev(port):
             return bytes([self.n // 10 % 256])
 
         def image(self, raw=None):
+            if os.environ.get("ZERODESK_DEV_SCREEN"):         # a picture to mirror (dev only)
+                return Image.open(os.environ["ZERODESK_DEV_SCREEN"]).convert("RGB").resize((320, 170))
             img = Image.new("RGB", (320, 170), (13, 17, 23))
             d = ImageDraw.Draw(img)
             d.text((10, 10), "Fake Cardputer screen %d" % (self.n // 10), fill=(230, 237, 243))

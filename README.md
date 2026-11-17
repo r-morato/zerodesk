@@ -21,7 +21,7 @@ On the Cardputer, or from the browser's keyboard: `4` new code, `6` sign everyon
 ZeroDesk will be in the CardputerZero Store (share code `ZDSK`) once reviewed. Until then, build the `.deb` with `packaging/build-deb.sh` and run:
 
 ```sh
-sudo apt install ./zerodesk_0.1.6-1_arm64.deb
+sudo apt install ./zerodesk_0.1.7-1_arm64.deb
 ```
 
 Reboot once after installing so remote typing works.
