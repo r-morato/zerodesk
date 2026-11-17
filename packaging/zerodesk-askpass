@@ -1,0 +1,6 @@
+#!/bin/sh
+# sudo askpass for ZeroDesk: hands sudo the password the user just typed in the
+# app. It is passed through this process's environment (not argv, not stdin)
+# and sudo's env_reset keeps it away from the command it runs.
+[ -n "$ZERODESK_SUDO_PASSWORD" ] || exit 1
+printf '%s\n' "$ZERODESK_SUDO_PASSWORD"

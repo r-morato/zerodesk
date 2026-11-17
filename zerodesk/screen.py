@@ -90,6 +90,33 @@ BROWSER_KEYS.update({"Digit" + d: "KEY_" + d for d in "0123456789"})
 BROWSER_KEYS.update({"F%d" % i: "KEY_F%d" % i for i in range(1, 13)})
 
 
+_PLAIN = {" ": "Space", "\n": "Enter", "\t": "Tab", "-": "Minus", "=": "Equal", "[": "BracketLeft",
+          "]": "BracketRight", ";": "Semicolon", "'": "Quote", "`": "Backquote", "\\": "Backslash",
+          ",": "Comma", ".": "Period", "/": "Slash"}
+_SHIFTED = {"_": "Minus", "+": "Equal", "{": "BracketLeft", "}": "BracketRight", ":": "Semicolon",
+            '"': "Quote", "~": "Backquote", "|": "Backslash", "<": "Comma", ">": "Period", "?": "Slash"}
+_SHIFTED.update(dict(zip("!@#$%^&*()", ["Digit" + d for d in "1234567890"])))
+MAX_PASTE = 4000
+
+
+def text_to_keys(text):
+    """US-layout key strokes for text: list of (browser_code, shift)."""
+    out = []
+    for ch in text.replace("\r\n", "\n"):
+        if "a" <= ch <= "z":
+            out.append(("Key" + ch.upper(), False))
+        elif "A" <= ch <= "Z":
+            out.append(("Key" + ch, True))
+        elif "0" <= ch <= "9":
+            out.append(("Digit" + ch, False))
+        elif ch in _PLAIN:
+            out.append((_PLAIN[ch], False))
+        elif ch in _SHIFTED:
+            out.append((_SHIFTED[ch], True))
+        # anything else (emoji, accents) has no key on the Cardputer: skipped
+    return out
+
+
 class RemoteKeyboard:
     """A virtual keyboard. Needs write access to /dev/uinput (the package's
     udev rule gives that to the `input` group)."""
@@ -132,6 +159,14 @@ class RemoteKeyboard:
         self.ui.write(self.e.EV_KEY, code, 1 if pressed else 0)
         self.ui.syn()
         return True
+
+    def tap(self, browser_code, shift=False):
+        if shift:
+            self.key("ShiftLeft", True)
+        self.key(browser_code, True)
+        self.key(browser_code, False)
+        if shift:
+            self.key("ShiftLeft", False)
 
     def release_all(self):
         for code in list(self.down):

@@ -4,15 +4,17 @@ files and the live screen."""
 import asyncio
 import json
 import os
+import re
 import time
 import urllib.parse
 import zlib
 
 from aiohttp import WSMsgType, web
 
+from . import admin, network, packages
 from . import files as F
 from .apps import AppError, icon_path, list_apps
-from .screen import to_png
+from .screen import MAX_PASTE, text_to_keys, to_png
 from .security import COOKIE, ABSOLUTE_TIMEOUT, host_ok, is_local_address, origin_ok
 
 WEB_ROOT = os.environ.get("ZERODESK_WEB") or os.path.join(os.path.dirname(os.path.dirname(
@@ -50,6 +52,9 @@ class Context:
         self.shells = 0
         self._stats_cache = (0.0, None)
         self.viewers = 0
+        self.passwords = admin.Passwords()
+        self.jobs = admin.Jobs()
+        self.store = packages.Store()
 
 
 # ------------------------------------------------------------------ middleware
@@ -120,6 +125,7 @@ async def api_pair(request):
 
 async def api_logout(request):
     ctx = request.app["ctx"]
+    ctx.passwords.forget(request["session"].token)
     ctx.guard.logout(request["session"].token)
     resp = web.json_response({"ok": True})
     resp.del_cookie(COOKIE, path="/")
@@ -473,6 +479,12 @@ async def ws_screen(request):
                 kb.key(m["code"], bool(m.get("down")))
             elif m.get("type") == "refresh":
                 last_crc[0] = None
+            elif m.get("type") == "text" and kb and isinstance(m.get("text"), str):
+                for code, shift in text_to_keys(m["text"][:MAX_PASTE]):
+                    if ws.closed:
+                        break
+                    kb.tap(code, shift)
+                    await asyncio.sleep(0.012)
     finally:
         frame_task.cancel()
         watch_task.cancel()
@@ -481,6 +493,220 @@ async def ws_screen(request):
         ctx.viewers -= 1
         ctx.guard.changed.set()
     return ws
+
+
+# ------------------------------------------------------------------ admin jobs
+def _token(request):
+    return request["session"].token
+
+
+async def admin_status(request):
+    ctx = request.app["ctx"]
+    try:
+        needs = await _run(admin.needs_password)
+    except admin.AdminError as e:
+        return _json_error(400, str(e))
+    return web.json_response({"needs_password": needs,
+                              "remembered": ctx.passwords.get(_token(request)) is not None})
+
+
+async def admin_password(request):
+    ctx = request.app["ctx"]
+    b = await _body(request)
+    pw = b.get("password")
+    if not isinstance(pw, str) or not pw or len(pw) > 256:
+        return _json_error(400, "Bad request")
+    try:
+        await _run(admin.check_password, pw)
+    except admin.NeedPassword:
+        return _json_error(403, "Wrong password")
+    except admin.AdminError as e:
+        return _json_error(400, str(e))
+    ctx.passwords.set(_token(request), pw)
+    return web.json_response({"ok": True})
+
+
+async def admin_forget(request):
+    request.app["ctx"].passwords.forget(_token(request))
+    return web.json_response({"ok": True})
+
+
+async def _start_job(request, title, steps_factory):
+    """Check the admin password for this session, then start the job."""
+    ctx = request.app["ctx"]
+    pw = ctx.passwords.get(_token(request))
+    try:
+        await _run(admin.check_password, pw)
+    except admin.NeedPassword as e:
+        if e.wrong:
+            ctx.passwords.forget(_token(request))
+        return web.json_response({"need_password": True, "wrong": e.wrong}, status=428)
+    except admin.AdminError as e:
+        return _json_error(400, str(e))
+    try:
+        steps = steps_factory(pw)
+        job = ctx.jobs.start(title, steps)
+    except (admin.AdminError, network.NetError) as e:
+        return _json_error(409, str(e))
+    return web.json_response({"job": job.id})
+
+
+async def job_view(request):
+    job = request.app["ctx"].jobs.get(request.match_info["job_id"])
+    if not job:
+        raise web.HTTPNotFound()
+    return web.json_response(job.view())
+
+
+# ------------------------------------------------------------------ packages
+async def store_list(request):
+    ctx = request.app["ctx"]
+    try:
+        apps = await _run(ctx.store.apps)
+    except Exception as e:  # network errors of all kinds
+        return _json_error(502, "Couldn't reach the store: %s" % e)
+    installed = await _run(packages.installed_versions)
+    for a in apps:
+        a["installed"] = installed.get(a["package"])
+    return web.json_response({"apps": apps})
+
+
+async def store_install(request):
+    ctx = request.app["ctx"]
+    code = request.match_info["code"]
+    try:
+        entry = await _run(ctx.store.entry, code)
+    except Exception as e:
+        return _json_error(404, str(e))
+
+    def factory(pw):
+        def steps(job):
+            path = packages.download_store_deb(job, entry)
+            packages.install_steps(path, pw)(job)
+        return steps
+    return await _start_job(request, "Install %s" % entry.get("title", code), factory)
+
+
+async def deb_upload(request):
+    reader = await request.multipart()
+    part = await reader.next()
+    while part is not None and (part.name != "file" or not part.filename):
+        part = await reader.next()
+    if part is None or not part.filename.lower().endswith(".deb"):
+        return _json_error(400, "Choose a .deb file")
+    dest = os.path.join(await _run(packages.cache_dir), "upload-%d.deb" % int(time.time() * 1000))
+    size = 0
+    with open(dest, "wb") as fh:
+        while True:
+            chunk = await part.read_chunk(256 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > packages.MAX_DEB:
+                fh.close()
+                os.remove(dest)
+                return _json_error(400, "Package is too large")
+            await _run(fh.write, chunk)
+    try:
+        info = await _run(packages.deb_info, dest)
+    except admin.AdminError as e:
+        os.remove(dest)
+        return _json_error(400, str(e))
+    resp = await _start_job(request, "Install %s" % info["Package"],
+                            lambda pw: packages.install_steps(dest, pw))
+    if resp.status != 200 and resp.status != 428:
+        os.remove(dest)
+    if resp.status == 428:
+        # keep the upload so the browser can retry after the password
+        resp = web.json_response({"need_password": True, "upload": os.path.basename(dest)}, status=428)
+    return resp
+
+
+async def deb_install_cached(request):
+    """Retry installing a just-uploaded package after the password was given."""
+    b = await _body(request)
+    name = b.get("upload")
+    if not isinstance(name, str) or not re.fullmatch(r"upload-\d+\.deb", name):
+        return _json_error(400, "Bad request")
+    path = os.path.join(await _run(packages.cache_dir), name)
+    if not os.path.isfile(path):
+        return _json_error(404, "Upload expired, please upload again")
+    info = await _run(packages.deb_info, path)
+    return await _start_job(request, "Install %s" % info["Package"],
+                            lambda pw: packages.install_steps(path, pw))
+
+
+async def installed_apps(request):
+    owned = await _run(packages.launcher_packages)
+    ctx = request.app["ctx"]
+    apps = await _run(list_apps, ctx.apps_root) if ctx.apps_root else await _run(list_apps)
+    names = {a["id"]: a["name"] for a in apps}
+    return web.json_response({"apps": sorted(
+        [{"package": p, "name": names.get(d, p)} for p, d in owned.items()],
+        key=lambda a: a["name"].lower())})
+
+
+async def package_remove(request):
+    pkg = request.match_info["pkg"]
+    if not packages.PKG_RE.fullmatch(pkg):
+        return _json_error(400, "Bad package name")
+    return await _start_job(request, "Remove %s" % pkg, lambda pw: packages.remove_steps(pkg, pw))
+
+
+# ------------------------------------------------------------------ network
+async def net_overview(request):
+    try:
+        return web.json_response(await _run(network.overview))
+    except network.NetError as e:
+        return _json_error(400, str(e))
+
+
+async def net_scan(request):
+    try:
+        nets = await _run(network.scan, request.query.get("rescan") == "1")
+    except network.NetError as e:
+        return _json_error(400, str(e))
+    return web.json_response({"networks": nets})
+
+
+async def net_up(request):
+    b = await _body(request)
+    try:
+        await _run(network.up, b.get("uuid"))
+    except network.NetError as e:
+        return _json_error(400, str(e))
+    return web.json_response({"ok": True})
+
+
+async def net_down(request):
+    b = await _body(request)
+    try:
+        await _run(network.down, b.get("uuid"))
+    except network.NetError as e:
+        return _json_error(400, str(e))
+    return web.json_response({"ok": True})
+
+
+async def net_join(request):
+    b = await _body(request)
+    ssid, psk = b.get("ssid"), b.get("password") or ""
+    if not isinstance(ssid, str) or not isinstance(psk, str):
+        return _json_error(400, "Bad request")
+    try:
+        network.join_steps(ssid, psk, None)        # validate before asking for anything
+    except network.NetError as e:
+        return _json_error(400, str(e))
+    return await _start_job(request, "Join %s" % ssid, lambda pw: network.join_steps(ssid, psk, pw))
+
+
+async def net_forget(request):
+    b = await _body(request)
+    uuid = b.get("uuid")
+    try:
+        network.forget_steps(uuid, None)
+    except network.NetError as e:
+        return _json_error(400, str(e))
+    return await _start_job(request, "Forget network", lambda pw: network.forget_steps(uuid, pw))
 
 
 # ------------------------------------------------------------------ app
@@ -507,6 +733,22 @@ def make_app(ctx):
     r.add_get("/api/apps/{app_id}/icon", apps_icon)
     r.add_post("/api/apps/{app_id}/start", apps_start)
     r.add_post("/api/apps/stop", apps_stop)
+    r.add_get("/api/admin/status", admin_status)
+    r.add_post("/api/admin/password", admin_password)
+    r.add_post("/api/admin/forget", admin_forget)
+    r.add_get("/api/jobs/{job_id}", job_view)
+    r.add_get("/api/store", store_list)
+    r.add_post("/api/store/{code}/install", store_install)
+    r.add_post("/api/packages/upload", deb_upload)
+    r.add_post("/api/packages/install-upload", deb_install_cached)
+    r.add_get("/api/packages/installed", installed_apps)
+    r.add_post("/api/packages/{pkg}/remove", package_remove)
+    r.add_get("/api/network", net_overview)
+    r.add_get("/api/network/scan", net_scan)
+    r.add_post("/api/network/up", net_up)
+    r.add_post("/api/network/down", net_down)
+    r.add_post("/api/network/join", net_join)
+    r.add_post("/api/network/forget", net_forget)
     r.add_get("/ws/shell", ws_shell)
     r.add_get("/ws/screen", ws_screen)
     return app

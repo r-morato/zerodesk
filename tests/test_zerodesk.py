@@ -414,3 +414,65 @@ class TestServer_(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFeatures(unittest.TestCase):
+    def test_text_to_keys(self):
+        from zerodesk.screen import text_to_keys
+        self.assertEqual(text_to_keys("aB1!\n"), [("KeyA", False), ("KeyB", True), ("Digit1", False),
+                                                 ("Digit1", True), ("Enter", False)])
+        self.assertEqual(text_to_keys("é😀"), [])                 # no key for these: skipped
+
+    def test_password_memory_expires(self):
+        from zerodesk import admin
+        clock = Clock()
+        p = admin.Passwords(clock)
+        p.set("tok", "pw")
+        self.assertEqual(p.get("tok"), "pw")
+        clock.t += admin.PASSWORD_TTL + 1
+        self.assertIsNone(p.get("tok"))
+
+    def test_store_urls_and_names(self):
+        from zerodesk import packages
+        self.assertTrue(packages._allowed_url("https://github.com/CardputerZero/packages/releases/download/x/a.deb"))
+        for bad in ("http://github.com/a.deb", "https://evil.com/a.deb", "https://github.com.evil.com/a.deb",
+                    "file:///etc/passwd"):
+            self.assertFalse(packages._allowed_url(bad), bad)
+        self.assertIsNone(packages.PKG_RE.fullmatch("-rf"))
+        self.assertIsNone(packages.PKG_RE.fullmatch("a;b"))
+
+    def test_store_checksum_mismatch_refuses(self):
+        from zerodesk import admin, packages
+        import io
+        job = admin.Job("t")
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Opener:
+            def open(self, req, timeout=None):
+                return Resp(b"tampered")
+        old = packages.urllib.request.build_opener
+        packages.urllib.request.build_opener = lambda *a: Opener()
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_CACHE_HOME"] = d
+            try:
+                with self.assertRaises(admin.AdminError):
+                    packages.download_store_deb(job, {"title": "x", "download": {
+                        "url": "https://github.com/x.deb", "sha256": "0" * 64, "package": "x"}})
+                self.assertEqual(os.listdir(os.path.join(d, "zerodesk", "debs")), [])   # nothing kept
+            finally:
+                packages.urllib.request.build_opener = old
+                del os.environ["XDG_CACHE_HOME"]
+
+    def test_wifi_validation(self):
+        from zerodesk import network
+        for ssid, psk in (("", "password1"), ("x" * 33, "password1"), ("home", "short")):
+            with self.assertRaises(network.NetError):
+                network.join_steps(ssid, psk, None)
+        network.join_steps("home", "password1", None)
+        network.join_steps("open cafe", "", None)

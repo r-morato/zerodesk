@@ -21,6 +21,7 @@ install -d "$LIB/$PKG" "$LIB/web/vendor" "$APP/bin" "$APP/applications" "$APP/sh
 
 install -m 0644 "$ROOT"/zerodesk/*.py "$LIB/$PKG/"
 install -m 0644 "$ROOT/packaging/run.py" "$LIB/run.py"
+install -m 0755 "$ROOT/packaging/zerodesk-askpass" "$LIB/zerodesk-askpass"
 install -m 0644 "$ROOT"/web/*.html "$ROOT"/web/*.js "$ROOT"/web/*.css "$ROOT"/web/*.svg "$LIB/web/"
 install -m 0644 "$ROOT"/web/vendor/* "$LIB/web/vendor/"
 install -m 0755 "$ROOT/packaging/zerodesk.sh" "$APP/bin/$PKG"
@@ -36,7 +37,7 @@ Version: $FULLVER
 Architecture: $ARCH
 Maintainer: $MAINTAINER
 Installed-Size: $SIZE_KB
-Depends: python3 (>= 3.11), python3-aiohttp, python3-pil, python3-evdev, openssl
+Depends: python3 (>= 3.11), python3-aiohttp, python3-pil, python3-evdev, openssl, sudo
 Section: admin
 Priority: optional
 Homepage: https://github.com/r-morato/zerodesk

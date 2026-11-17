@@ -55,9 +55,12 @@
     return data;
   }
 
-  function dialog(message, withInput, value, okLabel, danger) {
+  document.querySelectorAll(".dlg-cancel").forEach(b => b.addEventListener("click", () => b.closest("dialog").close("cancel")));
+  function dialog(message, withInput, value, okLabel, danger, secret) {
     return new Promise((resolve) => {
       const d = $("dlg"), inp = $("dlg-input"), ok = $("dlg-ok");
+      inp.type = secret ? "password" : "text";
+      d.returnValue = "";
       $("dlg-msg").textContent = message;
       inp.classList.toggle("hidden", !withInput);
       inp.value = value || "";
@@ -70,6 +73,72 @@
   }
 
   function wsUrl(path) { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + path; }
+
+  // ---------------------------------------------------------------- admin password + jobs
+  function askPassword(wrong) {
+    return new Promise((resolve) => {
+      const d = $("pw-dlg"), inp = $("pw-input");
+      inp.value = "";
+      $("pw-err").textContent = wrong ? "Wrong password, try again." : "";
+      d.onclose = () => resolve(d.returnValue === "ok" && inp.value ? inp.value : null);
+      d.returnValue = "";
+      d.showModal();
+      inp.focus();
+    });
+  }
+  // POST something that may need the admin password; handles the prompt and retry.
+  async function adminPost(url, body) {
+    let wrong = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const r = await fetch(url, {
+        method: "POST", credentials: "same-origin",
+        headers: body instanceof FormData ? {} : { "Content-Type": "application/json" },
+        body: body instanceof FormData ? body : JSON.stringify(body || {}),
+      });
+      if (r.status === 401) { location.replace("/login"); return null; }
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 428 && data.need_password) {
+        if (data.upload) { url = "/api/packages/install-upload"; body = { upload: data.upload }; }
+        const pw = await askPassword(wrong || data.wrong);
+        if (!pw) return null;
+        wrong = false;
+        try { await api("POST", "/api/admin/password", { password: pw }); }
+        catch (e) {
+          if (e.message !== "Wrong password") { toast(e.message, true); return null; }
+          wrong = true;
+        }
+        continue;
+      }
+      if (!r.ok) throw new Error(data.error || ("Error " + r.status));
+      return data;
+    }
+    throw new Error("Couldn't get admin access");
+  }
+  function followJob(jobId, title) {
+    return new Promise((resolve) => {
+      const d = $("job-dlg"), log = $("job-log"), st = $("job-state");
+      $("job-title").textContent = title;
+      log.textContent = ""; st.textContent = "Working…"; st.className = "small";
+      d.showModal();
+      const poll = async () => {
+        let j;
+        try { j = await api("GET", "/api/jobs/" + jobId); } catch (e) { setTimeout(poll, 2000); return; }
+        log.textContent = j.log; log.scrollTop = log.scrollHeight;
+        if (j.state === "running") { setTimeout(poll, 800); return; }
+        st.textContent = j.state === "done" ? "Done" : "Failed: see the log above";
+        st.className = "small " + (j.state === "done" ? "ok" : "bad");
+        resolve(j.state === "done");
+      };
+      poll();
+    });
+  }
+  async function runAdmin(url, body, title) {
+    try {
+      const r = await adminPost(url, body);
+      if (r && r.job) return await followJob(r.job, title);
+    } catch (e) { toast(e.message, true); }
+    return false;
+  }
 
   // ---------------------------------------------------------------- tabs
   const tabs = {};
@@ -219,6 +288,57 @@
       const b = e.target.closest("button[data-key]");
       if (!b) return;
       key(b.dataset.key, true); setTimeout(() => key(b.dataset.key, false), 60);
+    });
+
+    // screenshot + recording happen in the browser, from frames it already has
+    function bigCanvas() {
+      const c = document.createElement("canvas");
+      c.width = canvas.width * 3; c.height = canvas.height * 3;
+      const g = c.getContext("2d"); g.imageSmoothingEnabled = false;
+      g.drawImage(canvas, 0, 0, c.width, c.height);
+      return c;
+    }
+    function saveBlob(blob, name) {
+      const a = el("a"); a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    const stamp = () => new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    $("shot").addEventListener("click", () => bigCanvas().toBlob(b => saveBlob(b, "cardputer-" + stamp() + ".png"), "image/png"));
+    let rec = null, recTimer = null;
+    $("rec").addEventListener("click", () => {
+      if (rec) { rec.stop(); return; }
+      const out = document.createElement("canvas");
+      out.width = canvas.width * 3; out.height = canvas.height * 3;
+      const g = out.getContext("2d"); g.imageSmoothingEnabled = false;
+      let raf;
+      const copy = () => { g.drawImage(canvas, 0, 0, out.width, out.height); raf = requestAnimationFrame(copy); };
+      copy();
+      const types = ["video/webm;codecs=vp9", "video/webm", "video/mp4"];
+      const type = types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+      if (!type) { cancelAnimationFrame(raf); toast("This browser can't record video", true); return; }
+      const chunks = [];
+      rec = new MediaRecorder(out.captureStream(20), { mimeType: type, videoBitsPerSecond: 2500000 });
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = () => {
+        cancelAnimationFrame(raf); clearInterval(recTimer);
+        $("rec").textContent = "Record"; $("rec").classList.remove("recording"); $("rec-time").textContent = "";
+        saveBlob(new Blob(chunks, { type }), "cardputer-" + stamp() + (type.includes("mp4") ? ".mp4" : ".webm"));
+        rec = null;
+      };
+      rec.start(1000);
+      const t0 = Date.now();
+      $("rec").textContent = "Stop recording"; $("rec").classList.add("recording");
+      recTimer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $("rec-time").textContent = "● " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }, 500);
+    });
+    $("paste-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const t = $("paste-text").value;
+      if (!t) return;
+      if (!ws || ws.readyState !== 1) { toast("Not connected to the screen", true); return; }
+      send({ type: "text", text: t });
+      toast("Typing " + t.length + " characters on the Cardputer…");
+      $("paste-text").value = "";
     });
 
     // apps
@@ -452,6 +572,120 @@
     dz.addEventListener("drop", (e) => upload(e.dataTransfer.files));
 
     return { enter() { if (!loaded) open(""); } };
+  })();
+
+  // ---------------------------------------------------------------- apps (install/remove)
+  tabs.apps = (function () {
+    let store = [], loaded = false;
+    function render() {
+      const q = $("store-search").value.trim().toLowerCase();
+      const list = store.filter(a => !q || (a.title + " " + a.summary + " " + a.code + " " + a.categories.join(" ")).toLowerCase().includes(q));
+      $("store-count").textContent = list.length + " apps";
+      $("store-list").replaceChildren(...list.map(a => {
+        const d = el("div", "store-item");
+        const h = el("h3"); h.append(el("span", "", a.title), el("span", "code", a.code)); d.append(h);
+        d.append(el("p", "", a.summary));
+        const row = el("div", "row");
+        row.append(el("span", "", (a.author ? a.author + " · " : "") + "v" + a.version + " · " + fmtBytes(a.size)));
+        if (a.installed === a.version) row.append(el("span", "tag", "Installed"));
+        else {
+          const b = el("button", "primary small", a.installed ? "Update" : "Install");
+          b.addEventListener("click", async () => {
+            const ok = await runAdmin("/api/store/" + encodeURIComponent(a.code) + "/install", {}, (a.installed ? "Update " : "Install ") + a.title);
+            if (ok) { loadStore(); loadInstalled(); }
+          });
+          row.append(b);
+        }
+        d.append(row);
+        return d;
+      }));
+    }
+    async function loadStore() {
+      try { store = (await api("GET", "/api/store")).apps; render(); }
+      catch (e) { $("store-list").replaceChildren(el("p", "muted small", e.message)); }
+    }
+    async function loadInstalled() {
+      let d;
+      try { d = await api("GET", "/api/packages/installed"); } catch (e) { return; }
+      $("installed").tBodies[0].replaceChildren(...d.apps.map(a => {
+        const tr = el("tr");
+        const act = el("td", "td-act"); const b = el("button", "ghost small", "Remove");
+        b.addEventListener("click", async () => {
+          if (!await dialog("Remove " + a.name + " (" + a.package + ")?", false, "", "Remove", true)) return;
+          if (await runAdmin("/api/packages/" + encodeURIComponent(a.package) + "/remove", {}, "Remove " + a.name)) { loadInstalled(); loadStore(); }
+        });
+        act.append(b);
+        tr.append(el("td", "", a.name), el("td", "sig", a.package), act);
+        return tr;
+      }));
+    }
+    $("store-search").addEventListener("input", render);
+    $("inst-refresh").addEventListener("click", loadInstalled);
+    $("deb-upload").addEventListener("change", async (e) => {
+      const f = e.target.files[0]; e.target.value = "";
+      if (!f) return;
+      const fd = new FormData(); fd.append("file", f, f.name);
+      toast("Uploading " + f.name + "…");
+      if (await runAdmin("/api/packages/upload", fd, "Install " + f.name)) { loadInstalled(); loadStore(); }
+    });
+    return { enter() { if (!loaded) { loaded = true; loadStore(); loadInstalled(); } } };
+  })();
+
+  // ---------------------------------------------------------------- network
+  tabs.network = (function () {
+    let loaded = false;
+    async function loadConns() {
+      let d;
+      try { d = await api("GET", "/api/network"); } catch (e) { toast(e.message, true); return; }
+      $("conns").tBodies[0].replaceChildren(...d.connections.map(c => {
+        const tr = el("tr");
+        const act = el("td", "td-act");
+        const b = el("button", "ghost small", c.active ? "Disconnect" : "Connect");
+        b.addEventListener("click", async () => {
+          if (c.active && c.type === "wifi" && !await dialog("Disconnect " + c.name + "? This browser will probably lose contact with the Cardputer.", false, "", "Disconnect", true)) return;
+          b.disabled = true;
+          try { await api("POST", "/api/network/" + (c.active ? "down" : "up"), { uuid: c.uuid }); toast(c.name + (c.active ? " disconnected" : " connected")); }
+          catch (e) { toast(e.message, true); }
+          loadConns();
+        });
+        act.append(b);
+        if (c.type === "wifi" && !c.active) {
+          const f = el("button", "ghost small", "Forget");
+          f.addEventListener("click", async () => {
+            if (!await dialog("Forget the Wi-Fi network " + c.name + "?", false, "", "Forget", true)) return;
+            if (await runAdmin("/api/network/forget", { uuid: c.uuid }, "Forget " + c.name)) loadConns();
+          });
+          act.append(f);
+        }
+        const name = el("td"); name.append(el("span", "dot " + (c.active ? "ok" : "")), document.createTextNode(" " + c.name));
+        tr.append(name, el("td", "muted", c.type === "wifi" ? "Wi-Fi" : c.type === "vpn" ? "VPN" : "Ethernet"),
+          el("td", "muted", c.device), act);
+        return tr;
+      }));
+    }
+    async function scan(rescan) {
+      $("wifi").tBodies[0].replaceChildren(el("tr")); $("wifi").tBodies[0].firstChild.append(el("td", "muted small", "Scanning…"));
+      let d;
+      try { d = await api("GET", "/api/network/scan" + (rescan ? "?rescan=1" : "")); } catch (e) { toast(e.message, true); return; }
+      $("wifi").tBodies[0].replaceChildren(...d.networks.map(n => {
+        const tr = el("tr");
+        const act = el("td", "td-act");
+        if (!n.in_use) {
+          const b = el("button", "ghost small", "Join");
+          b.addEventListener("click", async () => {
+            let psk = "";
+            if (n.secure) { psk = await dialog("Wi-Fi password for " + n.ssid + ":", true, "", "Join", false, true); if (!psk) return; }
+            if (await runAdmin("/api/network/join", { ssid: n.ssid, password: psk }, "Join " + n.ssid)) loadConns();
+          });
+          act.append(b);
+        } else act.append(el("span", "tag", "Connected"));
+        tr.append(el("td", "", n.ssid), el("td", "num muted", n.signal + "%"), el("td", "muted", n.secure ? "🔒" : "open"), act);
+        return tr;
+      }));
+    }
+    $("net-refresh").addEventListener("click", loadConns);
+    $("wifi-scan").addEventListener("click", () => scan(true));
+    return { enter() { if (!loaded) { loaded = true; loadConns(); scan(false); } } };
   })();
 
   // ---------------------------------------------------------------- start

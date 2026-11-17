@@ -119,3 +119,32 @@ dialog { background: var(--panel); color: var(--text); border: 1px solid var(--l
 dialog::backdrop { background: rgba(0,0,0,.6); }
 dialog input { width: 100%; margin-top: 6px; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 16px 0 0; }
+
+/* screen tools + paste */
+.screen-tools { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+#rec.recording { border-color: var(--red); color: #ffa198; }
+.paste { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; }
+.paste textarea { flex: 1; resize: vertical; min-height: 38px; font-family: var(--mono); font-size: 12px; }
+
+/* apps + network */
+.apps-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.apps-bar input { flex: 1; max-width: 420px; }
+.apps-pages, .net-pages { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 960px) { .apps-pages, .net-pages { grid-template-columns: 1fr; } }
+.store-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; max-height: 70vh; overflow: auto; }
+.store-item { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; background: var(--panel2); }
+.store-item h3 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
+.store-item h3 .code { font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 400; }
+.store-item p { margin: 0; font-size: 12px; color: var(--muted); }
+.store-item .row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.tag { font-size: 11px; color: var(--green); }
+.sig { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.table td.td-act { text-align: right; width: 1%; max-width: none; overflow: visible; }
+.td-act button + button { margin-left: 4px; }
+
+/* dialogs */
+.dlg-title { text-transform: none; letter-spacing: 0; color: var(--text); font-size: 16px; margin: 0 0 8px; }
+dialog.job { width: min(720px, 92vw); }
+#job-log { background: #000; border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 50vh; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; margin: 0; }
+#job-state.ok { color: var(--green); } #job-state.bad { color: var(--red); }
+code { font-family: var(--mono); font-size: 12px; }
