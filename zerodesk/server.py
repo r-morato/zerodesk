@@ -139,6 +139,8 @@ async def api_info(request):
         "fingerprint": ctx.fingerprint, "sessions": ctx.guard.count(),
         "screen": ctx.fb is not None,
         "keyboard": ctx.keyboard is not None, "keyboard_error": ctx.keyboard_error,
+        "typing": ctx.keyboard.mode if ctx.keyboard else None,
+        "virtual_only": ctx.keyboard.virtual_only() if ctx.keyboard else [],
         "running": running and {"id": running["id"], "name": running["name"]}})
 
 

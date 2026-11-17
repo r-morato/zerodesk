@@ -209,39 +209,98 @@ class TestShellSafety(unittest.TestCase):
 
 
 class TestKeyFilter(unittest.TestCase):
-    def test_system_combos_blocked(self):
-        from zerodesk.screen import RemoteKeyboard
+    """RemoteKeyboard, run against a fake Cardputer keyboard and a fake uinput."""
 
-        class E:
-            EV_KEY = 1
-        kb = RemoteKeyboard.__new__(RemoteKeyboard)
-        kb.e = E()
-        names = ["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_DELETE", "KEY_F2", "KEY_LEFT", "KEY_A"]
-        kb.codes = {n: i + 10 for i, n in enumerate(names)}
+    def make(self, native_keys=None, keymap=None):
+        import types
+        from unittest import mock
+        from evdev import ecodes
+        import zerodesk.screen as scr
         sent = []
 
-        class UI:
+        class Dev:
+            def __init__(self, label, keys=()):
+                self.label, self.keys = label, keys
+
             def write(self, t, c, v):
-                sent.append((c, v))
+                sent.append((self.label, c, v))
 
             def syn(self):
                 pass
-        kb.ui, kb.down = UI(), set()
-        import zerodesk.screen as scr
-        old = scr.BROWSER_KEYS
-        scr.BROWSER_KEYS = {"C": "KEY_LEFTCTRL", "A": "KEY_LEFTALT", "Del": "KEY_DELETE",
-                            "F2": "KEY_F2", "L": "KEY_LEFT", "X": "KEY_A"}
-        try:
-            kb.key("C", True); kb.key("A", True)
-            self.assertFalse(kb.key("Del", True))       # Ctrl+Alt+Del
-            self.assertFalse(kb.key("F2", True))        # console switch
-            self.assertFalse(kb.key("L", True))
-            self.assertTrue(kb.key("X", True))          # ordinary keys still work
-            kb.key("A", False)
-            self.assertTrue(kb.key("Del", True))        # Ctrl+Del alone is fine
-        finally:
-            scr.BROWSER_KEYS = old
 
+            def capabilities(self):
+                return {ecodes.EV_KEY: list(self.keys)}
+
+            def close(self):
+                pass
+        fake = types.SimpleNamespace(UInput=lambda caps, name: Dev("ui"), ecodes=ecodes)
+        native = Dev("kb", native_keys) if native_keys is not None else None
+        with tempfile.NamedTemporaryFile("w", suffix=".map", delete=False) as fh:
+            fh.write(keymap or "")
+        try:
+            with mock.patch.dict(sys.modules, {"evdev": fake}), \
+                    mock.patch.object(scr.RemoteKeyboard, "_open_native", staticmethod(lambda p: native)):
+                kb = scr.RemoteKeyboard(keymap=fh.name if keymap else "/nonexistent")
+        finally:
+            os.unlink(fh.name)
+        return kb, sent
+
+    def test_system_combos_blocked(self):
+        from evdev import ecodes as E
+        kb, sent = self.make()
+        kb.key("ControlLeft", True); kb.key("AltLeft", True)
+        self.assertFalse(kb.key("Delete", True))       # Ctrl+Alt+Del
+        self.assertFalse(kb.key("F2", True))           # console switch
+        self.assertFalse(kb.key("ArrowLeft", True))
+        self.assertTrue(kb.key("KeyA", True))          # ordinary keys still work
+        kb.key("AltLeft", False)
+        self.assertTrue(kb.key("Delete", True))        # Ctrl+Del alone is fine
+        self.assertNotIn(("ui", E.KEY_DELETE, 1), sent[:4])
+
+    def test_types_through_the_cardputer_keyboard(self):
+        """Letters and symbols go into the Cardputer's own keyboard, symbols
+        with its own codes and no Shift; keys it can't make go to uinput."""
+        from evdev import ecodes as E
+        keys = [E.KEY_A, E.KEY_LEFTSHIFT, E.KEY_ENTER, 26, 71, 90]
+        kb, sent = self.make(keys, "keycode 90 = comma\nkeycode 71 = minus  # sym+R\nkeycode 26 = exclam\n")
+        self.assertEqual(kb.mode, "keyboard")
+        kb.tap("KeyA"); kb.tap("Minus"); kb.tap("Comma"); kb.tap("F5")
+        self.assertEqual(sent, [("kb", E.KEY_A, 1), ("kb", E.KEY_A, 0), ("kb", 71, 1), ("kb", 71, 0),
+                                ("kb", 90, 1), ("kb", 90, 0), ("ui", E.KEY_F5, 1), ("ui", E.KEY_F5, 0)])
+        del sent[:]
+        kb.tap("Digit1", shift=True)                   # "!": Shift lifted for the symbol
+        self.assertEqual(sent, [("kb", E.KEY_LEFTSHIFT, 1), ("kb", E.KEY_LEFTSHIFT, 0), ("kb", 26, 1),
+                                ("kb", 26, 0), ("kb", E.KEY_LEFTSHIFT, 1), ("kb", E.KEY_LEFTSHIFT, 0)])
+        del sent[:]
+        kb.tap("KeyA", shift=True)                     # "A" keeps Shift
+        self.assertEqual(sent, [("kb", E.KEY_LEFTSHIFT, 1), ("kb", E.KEY_A, 1), ("kb", E.KEY_A, 0),
+                                ("kb", E.KEY_LEFTSHIFT, 0)])
+        del sent[:]
+        kb.key("KeyA", True); kb.key("ShiftLeft", True); kb.release_all()
+        self.assertEqual(sorted(sent[-2:]), [("kb", E.KEY_A, 0), ("kb", E.KEY_LEFTSHIFT, 0)])
+
+    def test_lists_keys_built_in_apps_wont_get(self):
+        from evdev import ecodes as E
+        kb, _ = self.make([E.KEY_A, 90], "keycode 90 = comma\n")
+        missing = kb.virtual_only()
+        self.assertNotIn("KeyA", missing)
+        self.assertNotIn("Comma", missing)              # "," comes from the Cardputer's own code
+        self.assertIn("F5", missing)
+        self.assertIn("ArrowUp", missing)
+
+    def test_without_the_cardputer_keyboard_uses_uinput(self):
+        from evdev import ecodes as E
+        kb, sent = self.make(None)
+        self.assertEqual(kb.mode, "virtual")
+        kb.tap("Comma")
+        self.assertEqual(sent, [("ui", E.KEY_COMMA, 1), ("ui", E.KEY_COMMA, 0)])
+
+    def test_keymap_file_and_fallback(self):
+        from zerodesk.screen import load_symbol_codes, DEFAULT_SYMBOL_CODES
+        with tempfile.NamedTemporaryFile("w", suffix=".map") as fh:
+            fh.write("# comment\nkeycode 100 = comma\nkeycode 101 = bogus\n"); fh.flush()
+            self.assertEqual(load_symbol_codes(fh.name), {",": 100})
+        self.assertEqual(load_symbol_codes("/nonexistent"), DEFAULT_SYMBOL_CODES)
 
 class TestImage(unittest.TestCase):
     def test_rgb565_decode(self):

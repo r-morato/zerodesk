@@ -10,7 +10,7 @@ Open ZeroDesk on the Cardputer, type the address it shows into a browser on the 
 
 1. **Open ZeroDesk.** The Cardputer shows an address like `https://192.168.1.50:8443` and a 6-digit code.
 2. **Pair.** Open the address in a browser on the same network and enter the code. Your browser will warn about the certificate the first time: ZeroDesk makes its own, and the Cardputer shows the end of its fingerprint so you can check it.
-3. **Use it.** Tabs for Overview, Screen, Shell, Files, Apps and Network. On the Screen tab, click the keys or click the screen and type on your own keyboard. The on-screen keys follow the Cardputer's layout, including `fn` (arrows on `F` `Z` `X` `C`) and `sym`. Typing works on ZeroDesk's own screen and in apps you start from the browser, which run on the Cardputer while ZeroDesk keeps serving. (Apps opened from the Cardputer's launcher need ZeroDesk closed, so they can't be typed into remotely.)
+3. **Use it.** Tabs for Overview, Screen, Shell, Files, Apps and Network. On the Screen tab, click the keys or click the screen and type on your own keyboard. The on-screen keys follow the Cardputer's layout, including `fn` (arrows on `F` `Z` `X` `C`) and `sym`. Keys from the browser go in through the Cardputer's own keyboard, so they work everywhere a real key press would: ZeroDesk's own screen, the built-in apps and store apps you start from the browser, which run on the Cardputer while ZeroDesk keeps serving. (Apps opened from the Cardputer's launcher need ZeroDesk closed, so they can't be typed into remotely.)
 
 Installing or removing apps and joining Wi-Fi need admin rights, so the browser asks for your Cardputer password (the one `sudo` uses). It's checked, kept in memory for 5 minutes and never saved.
 
@@ -21,7 +21,7 @@ On the Cardputer, or from the browser's keyboard: `4` new code, `6` sign everyon
 ZeroDesk will be in the CardputerZero Store (share code `ZDSK`) once reviewed. Until then, build the `.deb` with `packaging/build-deb.sh` and run:
 
 ```sh
-sudo apt install ./zerodesk_0.1.4-1_arm64.deb
+sudo apt install ./zerodesk_0.1.5-1_arm64.deb
 ```
 
 Reboot once after installing so remote typing works.

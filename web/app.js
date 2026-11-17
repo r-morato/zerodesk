@@ -515,8 +515,14 @@
       try {
         const i = await api("GET", "/api/info");
         const note = $("kb-note");
-        note.classList.toggle("hidden", i.keyboard);
-        if (!i.keyboard) note.textContent = i.keyboard_error || "Remote typing isn't available.";
+        const missing = (i.virtual_only || []).filter(c => !/Right$|^Meta|^Context/.test(c));
+        let msg = "";
+        if (!i.keyboard) msg = i.keyboard_error || "Remote typing isn't available.";
+        else if (i.typing === "virtual") msg = "Typing reaches store apps but not the built-in apps (the Cardputer's keyboard couldn't be opened).";
+        else if (missing.length) msg = "Built-in apps don't receive these keys from the browser (store apps do): " +
+          missing.map(c => c.replace(/^Key|^Digit|Left$/g, "").replace(/^Arrow/, "")).join(", ") + ".";
+        note.classList.toggle("hidden", !msg);
+        note.textContent = msg;
         const app = i.running && (appsCache.find(a => a.id === i.running.id) || i.running);
         showRunning(app || null);
       } catch (e) { /* */ }

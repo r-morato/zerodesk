@@ -2,7 +2,7 @@
   "app_name": "ZeroDesk",
   "package_name": "zerodesk",
   "bin_name": "zerodesk",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Control your CardputerZero from a browser on your network",
   "store": {
     "summary": "Control your Cardputer from a browser: screen, shell, files, apps and Wi-Fi",
