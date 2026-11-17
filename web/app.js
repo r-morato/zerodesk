@@ -299,7 +299,7 @@
     const K = (code, label, o) => Object.assign({ code, label, shifted: label.length === 1 ? label.toUpperCase() : label }, o || {});
     const SHIFTED_DIGITS = "!@#$%^&*()";
     const ROWS = [
-      [K("Escape", "esc", { cls: "top" }), K("gap", "", { span: 9 }), K("Tab", "tab", { cls: "top" })],
+      [K("Escape", "esc", { cls: "side side-esc" }), K("Tab", "tab", { cls: "side side-tab" })],    // beside the screen
       [...Array.from("1234567890").map((d, i) => K("Digit" + d, d, { shifted: SHIFTED_DIGITS[i], fn: "F" + (i + 1), fnLabel: "F" + (i + 1) })),
        K("Backspace", "del")],
       [K("mod:sym", "sym"), ...["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"].map(c => K("Key" + c.toUpperCase(), c))],
@@ -334,8 +334,8 @@
                       "~": "Backquote", "|": "Backslash", "<": "Comma", ">": "Period", "?": "Slash" };
     const charKey = (ch) => PLAIN[ch] ? [PLAIN[ch], false] : [SHIFTED[ch], true];
 
-    const kb = $("kb"), mods = new Set(), keyEls = {};
-    ROWS.forEach(row => row.forEach(k => {
+    const kb = $("kb"), device = $("device"), face = $("face"), lcd = $("lcd"), mods = new Set(), keyEls = {};
+    ROWS.forEach((row, ri) => row.forEach(k => {
       if (k.code === "gap") { const g = el("span", "key-gap"); g.style.gridColumn = "span " + k.span; kb.append(g); return; }
       const b = el("button", "key" + (k.code.startsWith("mod:") ? " mod" : "") + (k.label.length > 1 ? " word" : "") + (k.cls ? " " + k.cls : ""));
       b.type = "button"; b.tabIndex = -1;
@@ -344,8 +344,33 @@
       const main = el("span", "main", k.label); b.append(main);
       b.dataset.code = k.code; b._k = k; b._main = main;
       b.setAttribute("aria-label", k.code.replace(/^mod:|Key|Digit/g, ""));
-      keyEls[k.code] = b; kb.append(b);
+      keyEls[k.code] = b; (ri === 0 ? face : kb).append(b);
     }));
+    // Put the screen exactly where it sits on the Cardputer: the key labels the
+    // apps draw along its bottom edge (x = 49 ... 273 of 320) land on keys 4 ... 8.
+    const MARK_4 = 49, MARK_8 = 273;
+    function placeScreen() {
+      const k4 = keyEls.Digit4, k8 = keyEls.Digit8, k1 = keyEls.Digit1, k0 = keyEls.Backspace;
+      if (!k4.offsetWidth) return;                     // tab hidden: try again when shown
+      const fr = face.getBoundingClientRect();
+      const mid = (b) => { const r = b.getBoundingClientRect(); return r.left + r.width / 2 - fr.left; };
+      const scale = (mid(k8) - mid(k4)) / (MARK_8 - MARK_4);
+      const bezel = parseFloat(getComputedStyle(lcd).paddingLeft) || 0;
+      const narrow = scale * 320 < 300;                // too small to read: use the full width instead
+      face.classList.toggle("narrow", narrow);
+      if (narrow) { lcd.style.marginLeft = ""; lcd.style.width = ""; }
+      else {
+        lcd.style.marginLeft = (mid(k4) - MARK_4 * scale - bezel) + "px";
+        lcd.style.width = (320 * scale + 2 * bezel) + "px";
+      }
+      const kw = k4.getBoundingClientRect().width;
+      [[keyEls.Escape, k1], [keyEls.Tab, k0]].forEach(([b, under]) => {
+        b.style.width = kw + "px";
+        b.style.left = narrow ? "" : (mid(under) - kw / 2) + "px";
+      });
+    }
+    if (window.ResizeObserver) new ResizeObserver(placeScreen).observe(device);
+    else window.addEventListener("resize", placeScreen);
     function refreshMods() {
       kb.classList.toggle("fn-on", mods.has("fn"));
       kb.classList.toggle("sym-on", mods.has("sym"));
@@ -356,7 +381,7 @@
       });
     }
     let held = null;      // the key being pressed with the mouse or a finger
-    kb.addEventListener("pointerdown", (e) => {
+    device.addEventListener("pointerdown", (e) => {
       const b = e.target.closest(".key");
       if (!b) return;
       e.preventDefault();
@@ -384,9 +409,9 @@
       held.b.classList.remove("down"); held = null;
       mods.clear(); refreshMods();
     }
-    kb.addEventListener("pointerup", letGo);
-    kb.addEventListener("pointercancel", letGo);
-    kb.addEventListener("lostpointercapture", letGo);
+    device.addEventListener("pointerup", letGo);
+    device.addEventListener("pointercancel", letGo);
+    device.addEventListener("lostpointercapture", letGo);
     // light up the on-screen key when typing on a real keyboard
     const physical = { ShiftRight: "mod:ShiftLeft", ControlRight: "mod:ControlLeft", AltRight: "mod:AltLeft",
                        ShiftLeft: "mod:ShiftLeft", ControlLeft: "mod:ControlLeft", AltLeft: "mod:AltLeft", NumpadEnter: "Enter" };
@@ -495,7 +520,7 @@
     }
 
     return {
-      enter() { wanted = true; connect(); loadApps(); pollInfo(); clearInterval(infoTimer); infoTimer = setInterval(pollInfo, 3000); },
+      enter() { wanted = true; requestAnimationFrame(placeScreen); connect(); loadApps(); pollInfo(); clearInterval(infoTimer); infoTimer = setInterval(pollInfo, 3000); },
       leave() { wanted = false; releaseAll(); clearInterval(infoTimer); if (ws) ws.close(); },
     };
   })();
