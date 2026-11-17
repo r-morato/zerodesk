@@ -780,62 +780,6 @@
     return { enter() { if (!loaded) { loaded = true; loadStore(); loadInstalled(); } } };
   })();
 
-  // ---------------------------------------------------------------- network
-  tabs.network = (function () {
-    let loaded = false;
-    async function loadConns() {
-      let d;
-      try { d = await api("GET", "/api/network"); } catch (e) { toast(e.message, true); return; }
-      $("conns").tBodies[0].replaceChildren(...d.connections.map(c => {
-        const tr = el("tr");
-        const act = el("td", "td-act");
-        const b = el("button", "ghost small", c.active ? "Disconnect" : "Connect");
-        b.addEventListener("click", async () => {
-          if (c.active && c.type === "wifi" && !await dialog("Disconnect " + c.name + "? This browser will probably lose contact with the Cardputer.", false, "", "Disconnect", true)) return;
-          b.disabled = true;
-          try { await api("POST", "/api/network/" + (c.active ? "down" : "up"), { uuid: c.uuid }); toast(c.name + (c.active ? " disconnected" : " connected")); }
-          catch (e) { toast(e.message, true); }
-          loadConns();
-        });
-        act.append(b);
-        if (c.type === "wifi" && !c.active) {
-          const f = el("button", "ghost small", "Forget");
-          f.addEventListener("click", async () => {
-            if (!await dialog("Forget the Wi-Fi network " + c.name + "?", false, "", "Forget", true)) return;
-            if (await runAdmin("/api/network/forget", { uuid: c.uuid }, "Forget " + c.name)) loadConns();
-          });
-          act.append(f);
-        }
-        const name = el("td"); name.append(el("span", "dot " + (c.active ? "ok" : "")), document.createTextNode(" " + c.name));
-        tr.append(name, el("td", "muted", c.type === "wifi" ? "Wi-Fi" : c.type === "vpn" ? "VPN" : "Ethernet"),
-          el("td", "muted", c.device), act);
-        return tr;
-      }));
-    }
-    async function scan(rescan) {
-      $("wifi").tBodies[0].replaceChildren(el("tr")); $("wifi").tBodies[0].firstChild.append(el("td", "muted small", "Scanning…"));
-      let d;
-      try { d = await api("GET", "/api/network/scan" + (rescan ? "?rescan=1" : "")); } catch (e) { toast(e.message, true); return; }
-      $("wifi").tBodies[0].replaceChildren(...d.networks.map(n => {
-        const tr = el("tr");
-        const act = el("td", "td-act");
-        if (!n.in_use) {
-          const b = el("button", "ghost small", "Join");
-          b.addEventListener("click", async () => {
-            let psk = "";
-            if (n.secure) { psk = await dialog("Wi-Fi password for " + n.ssid + ":", true, "", "Join", false, true); if (!psk) return; }
-            if (await runAdmin("/api/network/join", { ssid: n.ssid, password: psk }, "Join " + n.ssid)) loadConns();
-          });
-          act.append(b);
-        } else act.append(el("span", "tag", "Connected"));
-        tr.append(el("td", "", n.ssid), el("td", "num muted", n.signal + "%"), el("td", "muted", n.secure ? "Secured" : "Open"), act);
-        return tr;
-      }));
-    }
-    $("net-refresh").addEventListener("click", loadConns);
-    $("wifi-scan").addEventListener("click", () => scan(true));
-    return { enter() { if (!loaded) { loaded = true; loadConns(); scan(false); } } };
-  })();
 
   // ---------------------------------------------------------------- start
   const start = (location.hash || "#overview").slice(1);

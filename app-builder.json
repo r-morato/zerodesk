@@ -2,11 +2,11 @@
   "app_name": "ZeroDesk",
   "package_name": "zerodesk",
   "bin_name": "zerodesk",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Control your CardputerZero from a browser on your network",
   "store": {
-    "summary": "Control your Cardputer from a browser: screen, shell, files, apps and Wi-Fi",
-    "description": "Open ZeroDesk and it shows an address and a one-time pairing code. Enter them in a browser on the same network to get the Cardputer's live screen with a working copy of its keyboard (plus paste, screenshots and recordings), a shell, a file browser, store installs, Wi-Fi and VPN controls, and CPU, memory, battery and network stats. HTTPS and local network only; runs as your user; admin actions ask for your password. Remote typing needs one reboot after the first install.",
+    "summary": "Control your Cardputer from a browser: screen, keyboard, shell, files and apps",
+    "description": "Open ZeroDesk and it shows an address and a one-time pairing code. Enter them in a browser on the same network to get the Cardputer's live screen with a working copy of its keyboard (plus paste, screenshots and recordings), a shell, a file browser, app installs from the store, and CPU, memory, battery and network stats. HTTPS and local network only; runs as your user; installing apps asks for your password. Remote typing needs one reboot after the first install.",
     "categories": [
       "System Tools",
       "Development"

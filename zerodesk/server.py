@@ -10,7 +10,7 @@ import zlib
 
 from aiohttp import WSMsgType, web
 
-from . import admin, network, packages
+from . import admin, packages
 from . import files as F
 from .apps import AppError, icon_path, list_apps
 from .screen import MAX_PASTE, text_to_keys, to_png
@@ -559,7 +559,7 @@ async def _start_job(request, title, steps_factory):
     try:
         steps = steps_factory(pw)
         job = ctx.jobs.start(title, steps, owner=tok)
-    except (admin.AdminError, network.NetError) as e:
+    except admin.AdminError as e:
         return _json_error(409, str(e))
     return web.json_response({"job": job.id})
 
@@ -679,62 +679,6 @@ async def package_remove(request):
     return await _start_job(request, "Remove %s" % pkg, lambda pw: packages.remove_steps(pkg, pw))
 
 
-# ------------------------------------------------------------------ network
-async def net_overview(request):
-    try:
-        return web.json_response(await _run(network.overview))
-    except network.NetError as e:
-        return _json_error(400, str(e))
-
-
-async def net_scan(request):
-    try:
-        nets = await _run(network.scan, request.query.get("rescan") == "1")
-    except network.NetError as e:
-        return _json_error(400, str(e))
-    return web.json_response({"networks": nets})
-
-
-async def net_up(request):
-    b = await _body(request)
-    try:
-        await _run(network.up, b.get("uuid"))
-    except network.NetError as e:
-        return _json_error(400, str(e))
-    return web.json_response({"ok": True})
-
-
-async def net_down(request):
-    b = await _body(request)
-    try:
-        await _run(network.down, b.get("uuid"))
-    except network.NetError as e:
-        return _json_error(400, str(e))
-    return web.json_response({"ok": True})
-
-
-async def net_join(request):
-    b = await _body(request)
-    ssid, psk = b.get("ssid"), b.get("password") or ""
-    if not isinstance(ssid, str) or not isinstance(psk, str):
-        return _json_error(400, "Bad request")
-    try:
-        network.validate_join(ssid, psk)            # validate before asking for anything
-    except network.NetError as e:
-        return _json_error(400, str(e))
-    return await _start_job(request, "Join %s" % ssid, lambda pw: network.join_steps(ssid, psk, pw))
-
-
-async def net_forget(request):
-    b = await _body(request)
-    uuid = b.get("uuid")
-    try:
-        network.forget_steps(uuid, None)
-    except network.NetError as e:
-        return _json_error(400, str(e))
-    return await _start_job(request, "Forget network", lambda pw: network.forget_steps(uuid, pw))
-
-
 # ------------------------------------------------------------------ app
 async def close_sockets(app):
     """On quit: tell every browser we're going, instead of waiting for them."""
@@ -778,12 +722,6 @@ def make_app(ctx):
     r.add_post("/api/packages/install-upload", deb_install_cached)
     r.add_get("/api/packages/installed", installed_apps)
     r.add_post("/api/packages/{pkg}/remove", package_remove)
-    r.add_get("/api/network", net_overview)
-    r.add_get("/api/network/scan", net_scan)
-    r.add_post("/api/network/up", net_up)
-    r.add_post("/api/network/down", net_down)
-    r.add_post("/api/network/join", net_join)
-    r.add_post("/api/network/forget", net_forget)
     r.add_get("/ws/shell", ws_shell)
     r.add_get("/ws/screen", ws_screen)
     return app

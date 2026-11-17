@@ -585,24 +585,6 @@ class TestFeatures(unittest.TestCase):
                 packages.urllib.request.build_opener = old
                 del os.environ["XDG_CACHE_HOME"]
 
-    def test_wifi_validation(self):
-        from zerodesk import network
-        for ssid, psk in (("", "password1"), ("x" * 33, "password1"), ("home", "short")):
-            with self.assertRaises(network.NetError):
-                network.join_steps(ssid, psk, None)
-        network.join_steps("home", "password1", None)
-        network.join_steps("open cafe", "", None)
-
-    def test_wifi_keyfile_and_psk_rules(self):
-        from zerodesk import network
-        with self.assertRaises(network.NetError):
-            network.validate_join("home", "pass\x01word")          # non-printable
-        kf = network.keyfile("Hi;-h", "pa\\ss word", "u-1", sae=True)
-        self.assertIn("ssid=72;105;59;45;104;", kf)               # bytes, no escaping games
-        self.assertIn("psk=pa\\\\ss word", kf)
-        self.assertIn("key-mgmt=sae", kf)
-        self.assertNotIn("wifi-security", network.keyfile("open", "", "u-2"))
-
     def test_password_never_in_env_or_argv(self):
         """sudo gets the password on stdin, which is then closed."""
         from zerodesk import admin

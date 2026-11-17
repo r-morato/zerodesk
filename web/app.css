@@ -274,8 +274,8 @@ main { flex: 1; padding: 26px 22px; min-height: 0; width: 100%; max-width: 1480p
 .apps-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
 .apps-bar input { flex: 1; max-width: 440px; }
 .apps-bar .button { padding: 10px 16px; font-size: 14px; }
-.apps-pages, .net-pages { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 1000px) { .apps-pages, .net-pages { grid-template-columns: 1fr; } }
+.apps-pages { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .apps-pages { grid-template-columns: 1fr; } }
 .store-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; max-height: 70vh; overflow: auto; }
 .store-item { border: 1px solid var(--trace-soft); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 6px; background: var(--board-2); }
 .store-item:hover { border-color: var(--trace); }
