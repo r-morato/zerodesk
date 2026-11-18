@@ -721,7 +721,7 @@
     return { enter() { if (!loaded) open(""); } };
   })();
 
-  // ---------------------------------------------------------------- apps (install/remove)
+  // ---------------------------------------------------------------- apps (install)
   tabs.apps = (function () {
     let store = [], loaded = false;
     function render() {
@@ -758,13 +758,7 @@
       try { d = await api("GET", "/api/packages/installed"); } catch (e) { return; }
       $("installed").tBodies[0].replaceChildren(...d.apps.map(a => {
         const tr = el("tr");
-        const act = el("td", "td-act"); const b = el("button", "ghost small", "Remove");
-        b.addEventListener("click", async () => {
-          if (!await dialog("Remove " + a.name + " (" + a.package + ")?", false, "", "Remove", true)) return;
-          if (await runAdmin("/api/packages/" + encodeURIComponent(a.package) + "/remove", {}, "Remove " + a.name)) { loadInstalled(); loadStore(); }
-        });
-        act.append(b);
-        tr.append(el("td", "", a.name), el("td", "sig", a.package), act);
+        tr.append(el("td", "", a.name), el("td", "sig", a.package));
         return tr;
       }));
     }

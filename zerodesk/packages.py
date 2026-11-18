@@ -1,4 +1,4 @@
-"""Install and remove apps: from an uploaded .deb or from the CardputerZero
+"""Install apps: from an uploaded .deb or from the CardputerZero
 Store. Store downloads are checked against the store's published SHA-256."""
 
 import hashlib
@@ -49,7 +49,8 @@ def installed_versions():
 
 
 def launcher_packages(apps_dir=APPLAUNCH_APPS):
-    """Packages that own a launcher entry: the only ones ZeroDesk will remove."""
+    """Packages that own a launcher entry (the installed-apps list). ZeroDesk
+    never removes apps: that's left to the user."""
     try:
         files = [os.path.join(apps_dir, f) for f in os.listdir(apps_dir) if f.endswith(".desktop")]
     except OSError:
@@ -235,39 +236,4 @@ def install_steps(path, password):
                 os.remove(path)
             except OSError:
                 pass
-    return steps
-
-
-def removal_plan(pkg):
-    """Packages apt would remove along with pkg (simulated, nothing changes)."""
-    out = subprocess.run(["/usr/bin/apt-get", "-s", "remove", pkg], capture_output=True, text=True,
-                         timeout=60, env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-                         stdin=subprocess.DEVNULL)
-    if out.returncode != 0:
-        raise admin.AdminError("apt can't remove this package")
-    return [line.split()[1] for line in out.stdout.splitlines() if line.startswith("Remv ")]
-
-
-def priority(pkg):
-    out = subprocess.run(["dpkg-query", "-W", "-f=${Priority}\t${Essential}", pkg],
-                         capture_output=True, text=True, timeout=30)
-    return out.stdout.strip().split("\t") if out.returncode == 0 else ["", ""]
-
-
-def remove_steps(pkg, password):
-    def steps(job):
-        if pkg == SELF or pkg not in launcher_packages():
-            raise admin.AdminError("Only apps on the home screen can be removed here")
-        prio = priority(pkg)
-        if prio[0] in ("required", "important") or prio[-1] == "yes":
-            raise admin.AdminError("%s is part of the system, so it can't be removed here" % pkg)
-        others = [p for p in removal_plan(pkg) if p.split(":")[0] != pkg]
-        if others:
-            raise admin.AdminError("Removing %s would also remove %s, so it isn't done here. "
-                                   "Use the shell if you're sure." % (pkg, ", ".join(others[:8])))
-        proc = admin.sudo_popen(["/usr/bin/env", "DEBIAN_FRONTEND=noninteractive", "/usr/bin/apt-get",
-                                 "remove", "-y", pkg], password)
-        admin.stream(job, proc)
-        if job.state != "failed":
-            job.add("\nRemoved.\n")
     return steps

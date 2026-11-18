@@ -672,13 +672,6 @@ async def installed_apps(request):
         key=lambda a: a["name"].lower())})
 
 
-async def package_remove(request):
-    pkg = request.match_info["pkg"]
-    if not packages.PKG_RE.fullmatch(pkg):
-        return _json_error(400, "Bad package name")
-    return await _start_job(request, "Remove %s" % pkg, lambda pw: packages.remove_steps(pkg, pw))
-
-
 # ------------------------------------------------------------------ app
 async def close_sockets(app):
     """On quit: tell every browser we're going, instead of waiting for them."""
@@ -721,7 +714,6 @@ def make_app(ctx):
     r.add_post("/api/packages/upload", deb_upload)
     r.add_post("/api/packages/install-upload", deb_install_cached)
     r.add_get("/api/packages/installed", installed_apps)
-    r.add_post("/api/packages/{pkg}/remove", package_remove)
     r.add_get("/ws/shell", ws_shell)
     r.add_get("/ws/screen", ws_screen)
     return app

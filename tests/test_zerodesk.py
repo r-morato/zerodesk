@@ -632,6 +632,14 @@ class TestFeatures(unittest.TestCase):
             keys = device.PhysicalKeys()
         self.assertEqual(sorted(d.name for d in keys.devices), sorted(["cardputer-keyboard", UINPUT_NAME]))
 
+    def test_never_removes_apps(self):
+        """Store policy: an app must not affect other apps, so no removal."""
+        from zerodesk import packages
+        self.assertFalse(hasattr(packages, "remove_steps"))
+        from zerodesk.server import make_app, Context
+        app = make_app(Context(S.Guard(), Stats(), Runner("/nonexistent"), shell_factory=FakeShell))
+        self.assertFalse([r for r in app.router.routes() if "remove" in str(r.resource.canonical)])
+
     def test_virtual_keyboard_is_ordinary(self):
         """No SysRq on the virtual keyboard (see RemoteKeyboard)."""
         from zerodesk.screen import BROWSER_KEYS
@@ -683,15 +691,3 @@ class TestFeatures(unittest.TestCase):
         for bad in ("https://evil.com\\@github.com/a", "https://u@github.com/a", "https://[::1]@github.com/"):
             self.assertFalse(packages._allowed_url(bad), bad)
 
-    def test_remove_refuses_collateral(self):
-        from zerodesk import admin, packages
-        olds = (packages.launcher_packages, packages.priority, packages.removal_plan)
-        packages.launcher_packages = lambda: {"app": "app", "base": "base"}
-        packages.priority = lambda p: ["required", "no"] if p == "base" else ["optional", "no"]
-        packages.removal_plan = lambda p: ["app", "other-thing"]
-        try:
-            for pkg in ("base", "app", "zerodesk"):
-                with self.assertRaises(admin.AdminError):
-                    packages.remove_steps(pkg, None)(admin.Job("t"))
-        finally:
-            packages.launcher_packages, packages.priority, packages.removal_plan = olds
